@@ -17,7 +17,9 @@
 	                     Color3.fromRGB(r, g, b) and Color3.new(r, g, b)
 	            comments: -- line, --[[ block ]], --[=[ levelled ]=]
 	A Color3 becomes { Type = "Color3", R = 0..255, G = 0..255, B = 0..255 }.
-	Not supported (errors): function calls other than Color3, operators (.., +, ...), `function`, `if`, loops, `local a, b`.
+	`require(script.X)` becomes { Type = "Require", Target = "script.X" } with a warning (never run).
+	`game:GetService("RunService"):IsStudio()` is read as false (warning), and `not <boolean>` works.
+	Not supported (errors): function calls other than Color3 and require, operators (.., +, ...), `function`, `if`, loops, `local a, b`.
 ]==]
 
 local Setup = {}
@@ -291,8 +293,22 @@ local function parse(src: string)
 				return false
 			elseif name == "nil" then
 				return nil
-			elseif name == "function" or name == "if" or name == "for" or name == "while" or name == "not" then
+			elseif name == "not" then
+				-- `not <boolean>`; used as `Trespass = not game:GetService("RunService"):IsStudio()` [O: The Blacksite]
+				local v = value(depth + 1)
+				if type(v) ~= "boolean" then fail("'not' needs a boolean here", start) end
+				return not v
+			elseif name == "function" or name == "if" or name == "for" or name == "while" then
 				fail("'" .. name .. "' is not allowed: a setup chunk is data only", start)
+			elseif name == "game" then
+				-- the one runtime question a mission asks about itself: are we running in Studio? BreachEngine is not Studio [O: The Blacksite]
+				local tail = src:match('^:GetService%(%s*["\']RunService["\']%s*%)%s*:IsStudio%(%s*%)', pos)
+				if tail then
+					pos += #tail
+					warnings[#warnings + 1] = { pos = start, msg = "game:GetService(\"RunService\"):IsStudio() is read as false" }
+					return false
+				end
+				fail("only game:GetService(\"RunService\"):IsStudio() is allowed", start)
 			end
 			if name == "Color3" then
 				local m = src:match("^%.(%a+)", pos)
@@ -301,6 +317,21 @@ local function parse(src: string)
 					return readCall("Color3." .. m, depth)
 				end
 				fail("only Color3.fromRGB and Color3.new are allowed", start)
+			end
+			if name == "require" and not declared[name] then
+				-- require(script.Dialogue) and the like: a setup chunk may pull in a sibling ModuleScript. Never run; kept as a placeholder [O: The Blacksite]
+				skip()
+				expect("(")
+				local from, depthParen = pos, 1
+				while pos <= len and depthParen > 0 do
+					local ch = src:sub(pos, pos)
+					if ch == "(" then depthParen += 1 elseif ch == ")" then depthParen -= 1 end
+					pos += 1
+				end
+				if depthParen > 0 then fail("unterminated require(", start) end
+				local target = src:sub(from, pos - 2):gsub("^%s+", ""):gsub("%s+$", "")
+				warnings[#warnings + 1] = { pos = start, msg = "require(" .. target .. ") is not run; its value is a placeholder" }
+				return { Type = "Require", Target = target }
 			end
 			if not declared[name] then
 				fail("unknown name '" .. name .. "' (only earlier `local` constants can be referenced)", start)
