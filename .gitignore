@@ -1,0 +1,8 @@
+# Mission data from InfiltrationEngine-Custom-Missions is CC BY-NC-SA 4.0, not MIT. Keep it (and anything generated from it) out of this repo.
+breach-codec/tests/data/
+breach-codec/tests/_embedded.luau
+breach-codec/tests/_embedded_project.luau
+*.rbxm
+*.rbxl
+*.rbxlx
+*.rbxmx
