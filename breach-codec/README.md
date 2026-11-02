@@ -24,6 +24,7 @@ BreachTrespass.luau   Cells rule sets (incl. {expression} rules), disguises, enf
 BreachAlert.luau       alert level 0..3, AlertRaiseCondition, guard reactions (flee+radio, question, anomalies) (M8c)   (BUILT; standalone)
 BreachHostage.luau     hostages (aim, follow, flee timer, loud freeze), bodies, BotAltTrigger / BodyAltTrigger (M8d)   (BUILT; standalone)
 BreachBehavior.luau    CustomBehavior scripts + conditions, AlarmedBehaviorOverride, RandomBotSpawner (M8e)   (BUILT; standalone)
+BreachCombatData.luau  combat data model: spawners, pools, spawn parts, class table, concealed weapons (M9.0)   (BUILT; standalone)
 BreachSession.luau     wires all layers: step order, combined event log, signature (M8f)   (BUILT; standalone)
 src/body.luau         hand-written source of BreachCodec.luau
 src/tables.inc        generated data tables (type ids, property tables, enums)

@@ -74,7 +74,7 @@ Attacking never falls back to Searching on its own. A map script may still write
 
 | | Piece | Done when |
 |---|---|---|
-| **M9.0** | Data model: parse `CombatSpawner`, `ReinforcementPool`, `LoudSpawns`, `CustomCombatData`, `DetectConcealedWeapons`; class table; real Blacksite data in local tests | every Blacksite spawner and pool parses, class lookup tests |
+| **M9.0** *(done)* | Data model: parse `CombatSpawner`, `ReinforcementPool`, `LoudSpawns`, `CustomCombatData`, `DetectConcealedWeapons`; class table; real Blacksite data in local tests | every Blacksite spawner and pool parses, class lookup tests |
 | **M9a** | Phase machine (Searching / Attacking), awareness, noise and weapon-seen events, opt-in switch | scripted scenarios: broken camera stays Searching, drawn weapon in sight flips to Attacking |
 | **M9b** | Hostage pose: prone stance, trespass-cell check, guard helps up and escorts, escort event | pose works in Searching, fails in Attacking and in trespass cells |
 | **M9c** | Combat movement: hold at nearest node, hunt, hearing, lose track | guards hold, then hunt only after noise or sight |

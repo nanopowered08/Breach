@@ -608,6 +608,7 @@ require("./hostage_tests")(check)
 
 -- M8e: CustomBehavior scripts, conditions, spawners
 require("./behavior_tests")(check)
+require("./combatdata_tests")(check)
 
 -- M8f: seeded playthroughs through BreachSession
 require("./playthrough_tests")(check)
