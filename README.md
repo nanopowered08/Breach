@@ -1,5 +1,7 @@
 # BreachEngine — M1 – M8 drop
 
+Oh yeah by the way any PRs, Claude did not me, i gave Claude access to this
+
 ```
 docs/           BreachEngine_Documentation.md  (main spec, v0.24)
                 BreachEngine_Appendix_A_Attributes.md   (289 components / 1,746 attributes, generated)
