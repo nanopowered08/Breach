@@ -9,7 +9,7 @@ Run it from anywhere inside the repo, before you push:
     python3 tools/make_manifest.py --install-hook   # regenerate + `git add` automatically on every commit
 
 Which files are listed: breach-codec/Breach*.luau (the built, standalone modules) and everything under wrapper/ that is
-.luau or .lua, except *.server.luau / *.client.luau entry scripts (those are placed in Studio by hand).
+.luau or .lua, except tests/ and *.server.luau / *.client.luau entry scripts (those are placed in Studio by hand).
 """
 import hashlib, os, subprocess, sys
 
@@ -25,7 +25,8 @@ def listed_files():
             if name.startswith("Breach") and name.endswith(".luau"):
                 out.append("breach-codec/" + name)
     wrapper = os.path.join(ROOT, "wrapper")
-    for dirpath, _dirs, names in os.walk(wrapper):
+    for dirpath, dirs, names in os.walk(wrapper):
+        dirs[:] = [d for d in dirs if d != "tests"]  # tests are not loaded by the game
         for name in sorted(names):
             if name.endswith((".luau", ".lua")) and not name.endswith((".server.luau", ".client.luau")):
                 rel = os.path.relpath(os.path.join(dirpath, name), ROOT).replace(os.sep, "/")
