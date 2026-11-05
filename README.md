@@ -1,6 +1,24 @@
-# BreachEngine — M1 – M8 drop
+# BreachEngine — M1 – M8 (M9 Partial) drop
 
-Oh yeah by the way any PRs, Claude did not me, i gave Claude access to this
+> [!IMPORTANT]
+>
+> The InfiltrationEngine assets that Cish has made source-available [here](https://github.com/MoonstoneSkies/InfiltrationEngine-Custom-Missions) are distributed under the [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/) license.
+>
+> This is also a open source implementation of InfiltrationEngine by simply looking at the tools; I do not profit from any of my projects, and would never want to profit from them.
+>
+> **Third-party content and paid-access restrictions**
+>
+> BreachEngine does not grant access to InfiltrationEngine, Entry Point: Freelancer's Cut, Operators, or any other paid-access experiences.
+>
+> This repository does not intend to redistribute paid-access game content, bypass access restrictions, or provide unauthorized copies of game assets.
+>
+> Any third-party assets used by the demonstration must be independently obtained through authorized means and used in accordance with their respective licenses and applicable terms.
+>
+> BreachEngine is an independent hobby project and is not affiliated with or endorsed by Cish.
+>
+> poweredbyLuau(Breach), "Breach Together, Forever. Even if you pick up a shotgun and shoot it."
+
+Anthropic, give me a HIGHER limit please.
 
 ```
 docs/           BreachEngine_Documentation.md  (main spec, v0.24)
