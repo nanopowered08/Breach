@@ -4,7 +4,8 @@
 
 	    local Adapter = Breach.require("wrapper/BreachRoblox/Init")
 	    local run = Adapter.start(Breach, {
-	        MissionUrl = "http://localhost:8000/Blacksite.txt",     -- or MissionCode = "<the code>", or MissionValue = a StringValue / ModuleScript
+	        MissionValue = game.ServerStorage.MissionCode,   -- a ModuleScript made by wrapper/ImportMission.command.luau, or a StringValue
+	                                                     -- or MissionCode = "<the code>", or MissionUrl = "<somewhere that serves it>"
 	        RenderMap = true,         -- build the geometry as Parts (default true)
 	        ShowBarriers = false, ShowNodes = false, LogEvents = false,
 	        Seed = 416, Difficulty = 3, BotYOffset = 2.5, PlayerYOffset = 0,
@@ -57,7 +58,7 @@ local function fetchCode(options)
 		code = HttpService:GetAsync(options.MissionUrl, true)
 	end
 	if type(code) ~= "string" then
-		return nil, "no mission: set MissionCode, MissionValue (a StringValue or ModuleScript) or MissionUrl"
+		return nil, "no mission code found. Run wrapper/ImportMission.command.luau in the Command Bar to create ServerStorage.MissionCode (or set MissionCode, MissionValue or MissionUrl)"
 	end
 	return (code:gsub("^%s+", ""):gsub("%s+$", ""))
 end

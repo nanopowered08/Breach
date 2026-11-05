@@ -2,14 +2,14 @@
 -- Put this in ServerScriptService as a Script named "BreachBootstrap".
 -- Needs: Game Settings > Security > "Allow HTTP Requests" on, and ServerScriptService.LoadStringEnabled = true.
 --
--- The mission code is NOT in this repo (the missions are CC BY-NC-SA). Give the script one of:
---   * a local web server:   run `python3 -m http.server 8000` in the folder that holds Blacksite.txt, and keep MISSION_URL below
---   * a StringValue named "MissionCode" in ServerStorage holding the code (a StringValue holds up to 200,000 characters)
+-- The mission code is NOT in this repo (the missions are CC BY-NC-SA). Import it once with wrapper/ImportMission.command.luau
+-- (paste it into Studio's Command Bar and pick the .txt file): that creates ServerStorage.MissionCode. Save the place afterwards.
+-- Other options: set MISSION_URL to somewhere that serves the code, or put it in a StringValue (short codes only).
 local HttpService = game:GetService("HttpService")
 local ServerStorage = game:GetService("ServerStorage")
 
 local REPO, REF = "nanopowered08/Breach", "main"
-local MISSION_URL = "http://localhost:8000/Blacksite.txt"
+local MISSION_URL = nil -- optional, e.g. a local web server
 
 local BOOT = ("https://raw.githubusercontent.com/%s/%s/loader/BreachLoader.luau"):format(REPO, REF)
 
@@ -31,7 +31,7 @@ if not okAdapter then
 end
 
 local run = Adapter.start(Breach, {
-	MissionValue = ServerStorage:FindFirstChild("MissionCode"), -- used when present, otherwise MissionUrl
+	MissionValue = ServerStorage:FindFirstChild("MissionCode"), -- a ModuleScript (from the importer) or a StringValue
 	MissionUrl = MISSION_URL,
 	RenderMap = true,
 	ShowBarriers = false,
