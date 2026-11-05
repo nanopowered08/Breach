@@ -2,6 +2,8 @@
 breach-codec/tests/data/
 breach-codec/tests/_embedded.luau
 breach-codec/tests/_embedded_project.luau
+breach-codec/tests/_embedded_*.luau
+_bs_*.luau
 *.rbxm
 *.rbxl
 *.rbxlx
