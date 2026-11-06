@@ -61,6 +61,41 @@ function Core.loadMission(M, code, opts)
 	return session, { Mission = mission, Setup = setup, World = world, MapId = decoded.MapId, Decoded = decoded }
 end
 
+---------------------------------------------------------------------------------------------------------- props and doors
+-- A mission does not contain the geometry of its props and doors. Its `Props` folder holds one placeholder Part per prop: the Name is the prop's
+-- name in the prop library (Templates/Props.rbxm of the missions repo), the CFrame and Size say where, and the Attributes configure it.
+-- A library model has a part called `Base` whose Size equals the placeholder's Size [O: SlidingBlastDoor 10.4 x 7.4 x 0.9], so the model is
+-- placed with its Base on the placeholder. `DoubleDoor = true` doors are twice the width of one library door: two leaves [P: mirrored].
+-- Names that are not in the library are logic markers (ItemSpawn, triggers, nodes ...) or props only the game has; they are counted, not drawn.
+--
+--   local placements, skipped, total = Core.propPlacements(mission, function(name) return library[name] ~= nil end)
+--   placement = { Name, Path, X, Y, Z, Rx, Ry, Rz (radians, XYZ order), SizeX, SizeY, SizeZ, Leaves = 1 | 2 }
+function Core.propPlacements(mission, hasModel)
+	local placements, skipped, total = {}, {}, 0
+	local root = mission and mission:folder("Props")
+	local function walk(node)
+		local props = node.Props
+		if node.ClassName == "Part" and props and props.CFrame and props.CFrame.Position and props.Size then
+			total += 1
+			if hasModel(node.Name) then
+				local cf, size = props.CFrame, props.Size
+				local e = cf.EulerXYZ or { X = 0, Y = 0, Z = 0 }
+				placements[#placements + 1] = {
+					Name = node.Name, Path = node.Path,
+					X = cf.Position.X, Y = cf.Position.Y, Z = cf.Position.Z, Rx = e.X, Ry = e.Y, Rz = e.Z,
+					SizeX = size.X, SizeY = size.Y, SizeZ = size.Z,
+					Leaves = (node.Attrs and node.Attrs.DoubleDoor == true) and 2 or 1,
+				}
+			else
+				skipped[node.Name] = (skipped[node.Name] or 0) + 1
+			end
+		end
+		for _, child in ipairs(node.Children or {}) do walk(child) end
+	end
+	if root then walk(root) end
+	return placements, skipped, total
+end
+
 ---------------------------------------------------------------------------------------------------------- the adapter
 function Core.new(session, host, opts)
 	opts = opts or {}
