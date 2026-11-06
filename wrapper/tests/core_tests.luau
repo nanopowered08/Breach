@@ -165,6 +165,40 @@ return function(check)
 		check("load: a session error", e6 == "session: no nodes", e6)
 	end
 
+	-------------------------------------------------------------------------------- props and doors
+	do
+		local function propPart(name, x, y, z, ey, sx, sy, sz, attrs, children)
+			return { ClassName = "Part", Name = name, Path = "M/Props/" .. name, Attrs = attrs or {}, Children = children or {},
+				Props = { CFrame = { Position = { X = x, Y = y, Z = z }, EulerXYZ = { X = 0, Y = ey, Z = 0 } }, Size = { X = sx, Y = sy, Z = sz } } }
+		end
+		local folder = { Name = "Props", ClassName = "Folder", Children = {
+			propPart("SlidingBlastDoor", 1, 2, 3, 1.57, 10.4, 7.4, 0.9),
+			propPart("DoorMetal", 10, 0, 0, 3.14, 10, 7, 0.6, { DoubleDoor = true }),
+			propPart("DoorWood", 20, 0, 0, 0, 5, 7, 1, { DoubleDoor = false }),
+			propPart("ItemSpawn", 0, 0, 0, 0, 1, 1, 1),
+			propPart("ItemSpawn", 5, 0, 0, 0, 1, 1, 1),
+			{ ClassName = "Folder", Name = "Group", Children = {
+				propPart("Table", 30, 0, 0, 0, 4, 3, 2, nil, { propPart("Chair", 31, 0, 0, 0, 1, 1, 1) }),
+			} },
+			{ ClassName = "Model", Name = "Table", Children = {}, Props = {} },
+			{ ClassName = "Part", Name = "NoCFrame", Children = {}, Props = { Size = { X = 1, Y = 1, Z = 1 } } },
+		} }
+		local mission = { folder = function(_, name) if name == "Props" then return folder end end }
+		local lib = { SlidingBlastDoor = true, DoorMetal = true, DoorWood = true, Table = true, Chair = true }
+		local placements, skipped, total = Core.propPlacements(mission, function(n) return lib[n] == true end)
+		check("props: placeholders in the library are placed, others are counted", #placements == 5 and skipped.ItemSpawn == 2 and total == 7, #placements .. "/" .. tostring(total))
+		check("props: nested folders and parts inside parts are found, in order", placements[4].Name == "Table" and placements[5].Name == "Chair")
+		check("props: position, euler angles and size carry over", placements[1].X == 1 and placements[1].Y == 2 and placements[1].Z == 3 and placements[1].Ry == 1.57 and placements[1].SizeX == 10.4 and placements[1].SizeZ == 0.9)
+		check("props: a DoubleDoor is two leaves, everything else one", placements[2].Leaves == 2 and placements[1].Leaves == 1 and placements[3].Leaves == 1)
+		check("props: a Model or a part without a CFrame is not a placeholder", total == 7)
+		local none, sk, tot = Core.propPlacements({ folder = function() return nil end }, function() return true end)
+		check("props: no Props folder gives nothing", #none == 0 and next(sk) == nil and tot == 0)
+		local n2 = Core.propPlacements(nil, function() return true end)
+		check("props: no mission gives nothing", #n2 == 0)
+		local noLib = Core.propPlacements(mission, function() return false end)
+		check("props: an empty library places nothing", #noLib == 0)
+	end
+
 	-------------------------------------------------------------------------------- a real session (only when local mission data is present)
 	local okE, emb = pcall(require, "../../breach-codec/tests/_embedded")
 	if not okE then

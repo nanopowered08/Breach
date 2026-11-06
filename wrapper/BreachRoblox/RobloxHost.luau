@@ -231,4 +231,41 @@ function Host:renderMap(mission, options)
 	return count
 end
 
+-- Places prop and door models from the prop library (a Folder of Models, each with a `Base` part) at the given placements (see Core.propPlacements).
+-- Everything is anchored. Doors are shown closed; they do not open yet. Yields every 50 props. Returns how many models were placed.
+function Host:renderProps(placements, library)
+	local group = Instance.new("Folder")
+	group.Name = "Props"
+	group.Parent = self.MapFolder
+	local placed = 0
+	for i, p in ipairs(placements) do
+		local template = library:FindFirstChild(p.Name)
+		if template then
+			local target = CFrame.new(p.X, p.Y, p.Z) * CFrame.fromEulerAnglesXYZ(p.Rx, p.Ry, p.Rz)
+			for leaf = 1, p.Leaves do
+				local clone = template:Clone()
+				local base = clone:FindFirstChild("Base")
+				local offset = base and base:IsA("BasePart") and base.CFrame:ToObjectSpace(clone:GetPivot()) or CFrame.identity
+				local cf = target
+				if p.Leaves == 2 then
+					local dx = p.SizeX / 4
+					if leaf == 1 then
+						cf = target * CFrame.new(-dx, 0, 0)
+					else
+						cf = target * CFrame.new(dx, 0, 0) * CFrame.Angles(0, math.pi, 0)
+					end
+				end
+				clone:PivotTo(cf * offset)
+				for _, d in ipairs(clone:GetDescendants()) do
+					if d:IsA("BasePart") then d.Anchored = true end
+				end
+				clone.Parent = group
+				placed += 1
+			end
+		end
+		if i % 50 == 0 then task.wait() end
+	end
+	return placed
+end
+
 return Host
