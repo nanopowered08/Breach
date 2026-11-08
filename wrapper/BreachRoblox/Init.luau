@@ -8,6 +8,7 @@
 	                                                     -- or MissionCode = "<the code>", or MissionUrl = "<somewhere that serves it>"
 	        RenderMap = true,         -- build the geometry as Parts (default true)
 	        RenderProps = true,       -- place props and doors from the prop library (default true; needs ReplicatedStorage.Assets.Props, see below)
+	        ApplyLighting = true,     -- apply the mission's LightingSettings preset from ReplicatedStorage.Assets.LightingSettings (default true)
 	        PropsLibrary = nil,       -- a Folder of prop Models; default ReplicatedStorage.Assets.Props
 	        ShowBarriers = false, ShowNodes = false, LogEvents = false,
 	        Seed = 416, Difficulty = 3, BotYOffset = 2.5, PlayerYOffset = 0,
@@ -86,6 +87,18 @@ function Adapter.start(Breach, options)
 		return nil, info
 	end
 	local host = RobloxHost.new(options)
+
+	-- The mission's lighting preset (MissionSetup.LightingSettings), taken from the prop library's presets. Set ApplyLighting = false to keep the place's own.
+	local setting = info.Setup and info.Setup.LightingSettings
+	if options.ApplyLighting ~= false and setting ~= nil then
+		local assets = ReplicatedStorage:FindFirstChild("Assets")
+		local okL, applied, whyL = pcall(host.applyLighting, host, setting, assets and assets:FindFirstChild("LightingSettings"))
+		if okL and applied then
+			print(("[Breach] lighting preset %s applied"):format(applied))
+		else
+			print("[Breach] lighting not applied: " .. tostring(okL and whyL or applied))
+		end
+	end
 	local adapter = Core.new(session, host, { maxDt = options.MaxDt })
 	print(("[Breach] mission %s ready in %.1fs: %d bots (engine %s)"):format(tostring(info.MapId), os.clock() - t0, #session.Bots:alive(), Breach and Breach.version and Breach.version() or "?"))
 

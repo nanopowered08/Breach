@@ -268,4 +268,47 @@ function Host:renderProps(placements, library)
 	return placed
 end
 
+-- Applies a mission's `LightingSettings` (MissionSetup) from the prop library's lighting presets: a Folder per preset whose attributes are
+-- Lighting properties (Brightness, OutdoorAmbient, EnvironmentDiffuseScale) and whose children are the effects (Sky, Atmosphere, Blur, SunRays,
+-- ColorCorrection, Clouds). `setting` is the preset name, or a table that holds it (`Preset` / `Name` / first entry). `presets` is
+-- ReplicatedStorage.Assets.LightingSettings. Effects of a class the preset brings replace the ones already in Lighting; Clouds go under
+-- Workspace.Terrain (the only place Studio shows them). Returns the preset name, or nil, reason.
+function Host:applyLighting(setting, presets)
+	local name = setting
+	if type(setting) == "table" then
+		name = setting.Preset or setting.Name or setting[1]
+	end
+	if type(name) ~= "string" or name == "" then
+		return nil, "the mission's LightingSettings is not a preset name"
+	end
+	if not presets then
+		return nil, "no lighting presets (ReplicatedStorage.Assets.LightingSettings)"
+	end
+	local folder = presets:FindFirstChild(name)
+	if not folder then
+		local have = {}
+		for _, c in ipairs(presets:GetChildren()) do have[#have + 1] = c.Name end
+		return nil, ("no lighting preset named \"%s\" (have: %s)"):format(name, table.concat(have, ", "))
+	end
+	local Lighting = game:GetService("Lighting")
+	local brought = {}
+	for _, c in ipairs(folder:GetChildren()) do brought[c.ClassName] = true end
+	for _, c in ipairs(Lighting:GetChildren()) do
+		if brought[c.ClassName] then c:Destroy() end
+	end
+	if brought.Clouds then
+		for _, c in ipairs(workspace.Terrain:GetChildren()) do
+			if c:IsA("Clouds") then c:Destroy() end
+		end
+	end
+	for key, value in pairs(folder:GetAttributes()) do
+		pcall(function() Lighting[key] = value end)
+	end
+	for _, c in ipairs(folder:GetChildren()) do
+		local clone = c:Clone()
+		clone.Parent = c:IsA("Clouds") and workspace.Terrain or Lighting
+	end
+	return name
+end
+
 return Host
