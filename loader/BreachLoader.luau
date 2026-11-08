@@ -163,12 +163,60 @@ function Loader.start(options)
 		if opts.yield then opts.yield() elseif task then task.wait() end
 	end
 
+	local function manifestUrl()
+		local url = urlOf(opts.ManifestPath)
+		if opts.BustCache then url ..= "?t=" .. tostring(nowFn()) end
+		return url
+	end
+
+	-- Hash check with one recovery step. raw.githubusercontent.com caches, and the manifest and the files can come from different moments
+	-- (right after a merge: new file, old manifest, or the other way round). On a mismatch in the foreground (never a background swap, which
+	-- must simply fail) the manifest is fetched again with a cache-buster:
+	--   * the fresh manifest still lists the hash we wanted: the FILE was stale, so fetch it again with a cache-buster;
+	--   * the fresh manifest lists another hash: the MANIFEST was stale. It is adopted only if every file already loaded has the same hash in
+	--     it, so modules of two versions never mix.
+	-- A file that still does not match is refused as before (tampering looks the same as staleness, so it gets exactly one more look).
+	local function recover(g, path, got, want)
+		local okM, text = pcall(getFn, manifestUrl(), true)
+		if not okM or type(text) ~= "string" then return nil end
+		local fresh = parseManifest(text)
+		if not fresh then return nil end
+		local wanted = fresh[path]
+		if not wanted then return nil end
+		if wanted ~= want then
+			for p in pairs(g.Sources) do
+				if fresh[p] ~= g.Files[p] then return nil end
+			end
+			for p in pairs(g.Cache) do
+				if fresh[p] ~= g.Files[p] then return nil end
+			end
+		end
+		local src
+		if got == wanted then
+			src = nil -- the file we already have is the right one; only the manifest was stale
+		else
+			local okF, again = pcall(getFn, urlOf(path) .. "?t=" .. tostring(nowFn()), true)
+			if not okF or type(again) ~= "string" or Loader.sha256(again) ~= wanted then return nil end
+			src = again
+		end
+		if wanted ~= want then
+			g.Files = fresh
+			manifestText = text
+			warnFn("[Breach] the manifest was stale (GitHub cache); adopted the fresh one")
+		end
+		return true, src
+	end
+
 	local function fetchVerified(g, path, background)
 		local src = getFn(urlOf(path), false)
 		if type(src) ~= "string" then error("no data for " .. path, 0) end
 		if g.Files and opts.Verify then
 			local want = g.Files[path]
 			local got = Loader.sha256(src, background and yieldFn or nil)
+			if got ~= want and g == gen and not background then
+				local ok, better = recover(g, path, got, want)
+				if ok then return better or src end
+			end
 			if got ~= want then error("hash mismatch for " .. path .. " (manifest " .. tostring(want) .. ", got " .. got .. ")", 0) end
 		end
 		return src
@@ -243,12 +291,6 @@ function Loader.start(options)
 			local i = table.find(listeners, fn)
 			if i then table.remove(listeners, i) end
 		end
-	end
-
-	local function manifestUrl()
-		local url = urlOf(opts.ManifestPath)
-		if opts.BustCache then url ..= "?t=" .. tostring(nowFn()) end
-		return url
 	end
 
 	-- One probe. Returns "unchanged" | "swapped" | "failed" | "offline", plus detail.

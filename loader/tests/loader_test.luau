@@ -47,6 +47,7 @@ errHas(function() R("a.luau", "https://evil.example/x") end, "only paths inside 
 local repo, requests = {}, {}
 local function setFiles(t) for k, v in pairs(t) do repo[k] = v end end
 local served = {} -- what the fake server answers, may differ from repo to test hash mismatches
+local staleCache = {} -- path -> old body that a non-busted request still gets (GitHub's raw cache); a "?t=" request gets the real one
 local function manifestFor(files)
 	local lines = { "# breach-manifest v1" }
 	local names = {}
@@ -65,7 +66,8 @@ local function fakeGet(url, nocache)
 		if noManifest then error("HTTP 404", 0) end
 		return repo["manifest.txt"]
 	end
-	local body = served[path] or repo[path]
+	local busted = string.find(url, "%?t=%d+$") ~= nil
+	local body = (not busted and staleCache[path]) or served[path] or repo[path]
 	if not body then error("HTTP 404 " .. path, 0) end
 	return body
 end
@@ -121,6 +123,56 @@ do
 	local B = start()
 	errHas(function() B.require("solo") end, "hash mismatch", "tampered file refused")
 	served["solo.luau"] = nil
+end
+
+-- stale GitHub cache right after a merge --------------------------------------------------------------------------------------
+do
+	local solo0 = files["solo.luau"]
+	local b0 = files["util/b.luau"]
+	local function publish(changes)
+		for k, v in pairs(changes) do files[k] = v end
+		setFiles(files)
+		repo["manifest.txt"] = manifestFor(files)
+	end
+
+	-- 1. old manifest fetched at startup, new file fetched later: the fresh manifest is adopted
+	do
+		local B = start()
+		publish({ ["solo.luau"] = 'return { name = "solo", v = 2 }' })
+		check(B.require("solo").v == 2, "stale manifest at startup: the fresh one is adopted and the new file loads")
+		check(B.require("lib/c").name == "c", "and later files still verify against the adopted manifest")
+	end
+	publish({ ["solo.luau"] = solo0 })
+
+	-- 2. new manifest, but the file comes from the cache with old bytes: it is fetched again with a cache-buster
+	do
+		publish({ ["solo.luau"] = 'return { name = "solo", v = 3 }' })
+		staleCache["solo.luau"] = solo0
+		local B = start()
+		check(B.require("solo").v == 3, "stale file: refetched with a cache-buster")
+		staleCache["solo.luau"] = nil
+	end
+	publish({ ["solo.luau"] = solo0 })
+
+	-- 3. a stale manifest that would mix versions with what is already loaded is not adopted
+	do
+		local B = start()
+		B.require("util/b")
+		publish({ ["util/b.luau"] = 'return { name = "b", v = 9 }', ["solo.luau"] = 'return { name = "solo", v = 4 }' })
+		errHas(function() B.require("solo") end, "hash mismatch", "stale manifest is not adopted when a loaded file changed too")
+		check(B.require("util/b").v == 1, "the loaded module is untouched")
+	end
+	publish({ ["util/b.luau"] = b0, ["solo.luau"] = solo0 })
+
+	-- 4. real tampering is still refused, even with the retry
+	do
+		served["solo.luau"] = 'return { name = "TAMPERED" }'
+		local B = start()
+		errHas(function() B.require("solo") end, "hash mismatch", "tampered file still refused after the retry")
+		served["solo.luau"] = nil
+	end
+
+	check(repo["manifest.txt"] == manifestFor(files), "fixture restored")
 end
 
 -- no manifest: probing mode -------------------------------------------------------------------------------------------------

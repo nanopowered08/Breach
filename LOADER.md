@@ -41,3 +41,6 @@ restart to update.
 ## Licensing note
 The mission data used by the engine's tests (InfiltrationEngine-Custom-Missions, incl. The Blacksite) is CC BY-NC-SA 4.0, not
 MIT. `tests/data/` and `tests/_embedded*.luau` are in `.gitignore` for that reason; keep them in your local copy only.
+
+## Stale GitHub cache right after a merge
+`raw.githubusercontent.com` caches for a few minutes, so a play session started just after a merge can get the new `Init.luau` with the old `manifest.txt` (or the reverse) and fail with `hash mismatch`. For a file loaded in the foreground the loader now refetches the manifest once with a cache-buster: if the fresh manifest still wants the hash it expected, the file is refetched with a cache-buster; if the manifest itself was stale it is adopted, but only when every module already loaded has the same hash in it (no mixed versions). A file that still does not match is refused. Background hot-swaps are unchanged: they just fail and keep the loaded version.
