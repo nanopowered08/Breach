@@ -144,8 +144,9 @@ return function(check)
 
 	----------------------------------------------------------------------------------------------- the meter
 	do
-		local function timeToNotice(distance, attrs, stance)
+		local function timeToNotice(distance, attrs, stance, level)
 			local sight, bots, pl = scene(-5, 0, attrs)
+			if level then sight.LevelFn = function() return level end end
 			pl[1].X, pl[1].Y, pl[1].Z, pl[1].Stance = -5 + distance, 0, 0, stance or "stand"
 			for i = 1, 400 do
 				bots:step(DT)
@@ -165,6 +166,14 @@ return function(check)
 		check("meter: DetectionSpeed 0.5 takes twice as long (a dim guard)", slow and math.abs(slow - 2 * mid) <= 0.25, slow)
 		local quick = timeToNotice(35, { DetectionSpeed = 2 })
 		check("meter: DetectionSpeed 2 takes half as long", quick and math.abs(quick - mid / 2) <= 0.15, quick)
+		-- the alert level scales detection speed: Calm 0.9x, Normal 1x, Alert 1.1x [R]; Lockdown keeps 1.1x [P]
+		local calm, normal, alerted, lock = timeToNotice(35, nil, nil, 0), timeToNotice(35, nil, nil, 1), timeToNotice(35, nil, nil, 2), timeToNotice(35, nil, nil, 3)
+		check("meter: Calm (0.9x) is slower than Normal: about mid / 0.9", calm and math.abs(calm - mid / 0.9) <= 0.15, calm)
+		check("meter: Normal (1x) is the plain speed", normal and math.abs(normal - mid) <= 0.05, normal)
+		check("meter: Alert (1.1x) is faster: about mid / 1.1", alerted and math.abs(alerted - mid / 1.1) <= 0.15, alerted)
+		check("meter: Lockdown keeps Alert's speed [P]", lock and math.abs(lock - alerted) <= 0.05, lock)
+		check("meter: it multiplies with the bot's own DetectionSpeed (0.5 at Calm: mid / 0.45)", (function() local t = timeToNotice(35, { DetectionSpeed = 0.5 }, nil, 0) return t and math.abs(t - mid / 0.45) <= 0.3 end)())
+		check("meter: no level function = factor 1", timeToNotice(35) == mid)
 		local crouchFar = timeToNotice(35, nil, "crouch")
 		check("meter: crouched at 35 studs (range 42, so 0.83 of range) is slower than standing at 35 (0.5 of range)", crouchFar and crouchFar > mid, crouchFar)
 	end
