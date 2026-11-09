@@ -223,6 +223,26 @@ return function(check)
 		check("props: no mission gives nothing", #n2 == 0)
 		local noLib = Core.propPlacements(mission, function() return false end)
 		check("props: an empty library places nothing", #noLib == 0)
+
+		-- scalable props: no library model, drawn as plain parts
+		local function sp(name, x, attrs) return { ClassName = "Part", Name = name, Path = "P/" .. name, Attrs = attrs or {}, Children = {}, Props = { CFrame = { Position = { X = x, Y = 1, Z = 2 }, EulerXYZ = { X = 0, Y = 0.5, Z = 0 } }, Size = { X = 6, Y = 4, Z = 0.5 } } } end
+		local sfolder = { ClassName = "Folder", Name = "Props", Children = { sp("GarageDoor", 1), sp("Window", 2), sp("ItemSpawn", 3), sp("DoorMetal", 4), sp("Ladder", 5, { DoubleDoor = true }) } }
+		local smission = { folder = function(_, n) if n == "Props" then return sfolder end end }
+		local pl, sk, tot, sc = Core.propPlacements(smission, function(n) return n == "DoorMetal" end)
+		check("scalable: no library model: GarageDoor, Window and Ladder come back as scalables, in order", #sc == 3 and sc[1].Name == "GarageDoor" and sc[2].Name == "Window" and sc[3].Name == "Ladder")
+		check("scalable: they keep position, rotation and size", sc[1].X == 1 and sc[1].Y == 1 and sc[1].Z == 2 and sc[1].Ry == 0.5 and sc[1].SizeX == 6 and sc[1].SizeZ == 0.5)
+		check("scalable: they are one part each, whatever DoubleDoor says", sc[3].Leaves == 1)
+		check("scalable: they are not counted as skipped; unknown kinds still are", sk.GarageDoor == nil and sk.Window == nil and sk.ItemSpawn == 1 and tot == 5)
+		check("scalable: modelled placeholders are unchanged", #pl == 1 and pl[1].Name == "DoorMetal")
+		local pl2, _, _, sc2 = Core.propPlacements(smission, function(n) return n == "Window" or n == "DoorMetal" end)
+		check("scalable: a library model wins over the plain part", #pl2 == 2 and #sc2 == 2 and pl2[1].Name == "Window")
+		local want = { "GarageDoor", "Window", "Ladder", "ClimbablePipe", "DecorativePipe", "DecorativeVent", "ScalablePlanter", "ScalableWallPlanter", "ThinBush" }
+		local allStyled = true
+		for _, name in ipairs(want) do
+			local st = Core.ScalableProps[name]
+			if not (st and type(st.Color) == "table" and #st.Color == 3 and type(st.Material) == "string") then allStyled = false end
+		end
+		check("scalable: the nine HANDOFF kinds all have a style (colour, material)", allStyled)
 	end
 
 	-------------------------------------------------------------------------------- players: stance, armed and weapon reach the engine

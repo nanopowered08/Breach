@@ -92,24 +92,47 @@ end
 -- placed with its Base on the placeholder. `DoubleDoor = true` doors are twice the width of one library door: two leaves [P: mirrored].
 -- Names that are not in the library are logic markers (ItemSpawn, triggers, nodes ...) or props only the game has; they are counted, not drawn.
 --
---   local placements, skipped, total = Core.propPlacements(mission, function(name) return library[name] ~= nil end)
+-- Scalable props have NO model in the library: the game scripts them to resize to their placeholder [O: HANDOFF]. BreachEngine draws each as one plain
+-- Part the size of its placeholder, styled by Core.ScalableProps [P: the looks are guesses; Color0/Material0 tinting is not applied yet]. They are
+-- returned as a fourth list, with the same fields as a placement, and are not counted as skipped.
+--
+--   local placements, skipped, total, scalables = Core.propPlacements(mission, function(name) return library[name] ~= nil end)
 --   placement = { Name, Path, X, Y, Z, Rx, Ry, Rz (radians, XYZ order), SizeX, SizeY, SizeZ, Leaves = 1 | 2 }
+Core.ScalableProps = {
+	GarageDoor = { Color = { 0.60, 0.62, 0.64 }, Material = "Metal", Transparency = 0, Collide = true }, -- shown closed, like the other doors
+	Window = { Color = { 0.66, 0.80, 0.90 }, Material = "Glass", Transparency = 0.6, Collide = true },
+	Ladder = { Color = { 0.45, 0.45, 0.48 }, Material = "Metal", Transparency = 0, Collide = false }, -- not climbable yet: nothing to bump into
+	ClimbablePipe = { Color = { 0.50, 0.52, 0.55 }, Material = "Metal", Transparency = 0, Collide = true },
+	DecorativePipe = { Color = { 0.50, 0.52, 0.55 }, Material = "Metal", Transparency = 0, Collide = true },
+	DecorativeVent = { Color = { 0.62, 0.64, 0.66 }, Material = "Metal", Transparency = 0, Collide = true },
+	ScalablePlanter = { Color = { 0.36, 0.26, 0.18 }, Material = "Slate", Transparency = 0, Collide = true },
+	ScalableWallPlanter = { Color = { 0.36, 0.26, 0.18 }, Material = "Slate", Transparency = 0, Collide = true },
+	ThinBush = { Color = { 0.22, 0.45, 0.20 }, Material = "Grass", Transparency = 0, Collide = false },
+}
+
 function Core.propPlacements(mission, hasModel)
-	local placements, skipped, total = {}, {}, 0
+	local placements, skipped, total, scalables = {}, {}, 0, {}
 	local root = mission and mission:folder("Props")
 	local function walk(node)
 		local props = node.Props
 		if node.ClassName == "Part" and props and props.CFrame and props.CFrame.Position and props.Size then
 			total += 1
-			if hasModel(node.Name) then
+			local modelled, scalable = hasModel(node.Name), Core.ScalableProps[node.Name] ~= nil
+			if modelled or scalable then
 				local cf, size = props.CFrame, props.Size
 				local e = cf.EulerXYZ or { X = 0, Y = 0, Z = 0 }
-				placements[#placements + 1] = {
+				local p = {
 					Name = node.Name, Path = node.Path,
 					X = cf.Position.X, Y = cf.Position.Y, Z = cf.Position.Z, Rx = e.X, Ry = e.Y, Rz = e.Z,
 					SizeX = size.X, SizeY = size.Y, SizeZ = size.Z,
 					Leaves = (node.Attrs and node.Attrs.DoubleDoor == true) and 2 or 1,
 				}
+				if modelled then -- a library model wins over the plain part
+					placements[#placements + 1] = p
+				else
+					p.Leaves = 1
+					scalables[#scalables + 1] = p
+				end
 			else
 				skipped[node.Name] = (skipped[node.Name] or 0) + 1
 			end
@@ -117,7 +140,7 @@ function Core.propPlacements(mission, hasModel)
 		for _, child in ipairs(node.Children or {}) do walk(child) end
 	end
 	if root then walk(root) end
-	return placements, skipped, total
+	return placements, skipped, total, scalables
 end
 
 ---------------------------------------------------------------------------------------------------------- the adapter

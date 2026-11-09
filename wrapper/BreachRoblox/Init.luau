@@ -135,16 +135,24 @@ function Adapter.start(Breach, options)
 					local assets = ReplicatedStorage:FindFirstChild("Assets")
 					library = assets and assets:FindFirstChild("Props")
 				end
+				local hasModel = function(name) return library ~= nil and library:FindFirstChild(name) ~= nil end
 				if not library then
-					print("[Breach] no prop library: doors and props are not drawn. Insert Props.rbxm and move its Assets folder under ReplicatedStorage (see wrapper/BreachRoblox/Init.luau)")
-					return
+					print("[Breach] no prop library: doors and most props are not drawn. Insert Props.rbxm and move its Assets folder under ReplicatedStorage (see wrapper/BreachRoblox/Init.luau)")
 				end
-				local placements, skipped, total = Core.propPlacements(info.Mission, function(name) return library:FindFirstChild(name) ~= nil end)
-				local okP, placed = pcall(host.renderProps, host, placements, library)
-				local skippedKinds = 0
-				for _ in pairs(skipped) do skippedKinds += 1 end
-				print(okP and ("[Breach] props placed: %d models from %d placeholders (%d placeholders of %d kinds not in the library)"):format(placed, #placements, total - #placements, skippedKinds)
-					or ("[Breach] prop render failed: " .. tostring(placed)))
+				local placements, skipped, _, scalables = Core.propPlacements(info.Mission, hasModel)
+				local okS, made = pcall(host.renderScalables, host, scalables, Core.ScalableProps)
+				print(okS and ("[Breach] scalable props drawn as plain parts: %d (windows, garage doors, ladders, pipes, vents, planters, bushes)"):format(made)
+					or ("[Breach] scalable props failed: " .. tostring(made)))
+				if library then
+					local okP, placed = pcall(host.renderProps, host, placements, library)
+					local skippedKinds, skippedCount = 0, 0
+					for _, count in pairs(skipped) do
+						skippedKinds += 1
+						skippedCount += count
+					end
+					print(okP and ("[Breach] props placed: %d models from %d placeholders (%d placeholders of %d kinds not in the library, not drawn)"):format(placed, #placements, skippedCount, skippedKinds)
+						or ("[Breach] prop render failed: " .. tostring(placed)))
+				end
 			end
 		end)
 	end
