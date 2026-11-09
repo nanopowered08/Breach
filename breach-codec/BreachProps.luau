@@ -419,11 +419,17 @@ end
 -- Is the player carrying a drawn weapon? Guards flee only from an armed player (BreachAlert) [R]. Set by the host (BreachRoblox:
 -- the character attribute "BreachArmed", else an equipped Tool [P]); false by default.
 function Sim:setArmed(id, armed)
+	return self:setWeapon(id, armed and "drawn" or "holstered")
+end
+
+-- The weapon state of a player: "holstered" (default), "drawn" (seen = a threat) or "concealed" [P: M9, docs 8.3.2]. `Armed` is true only for "drawn".
+function Sim:setWeapon(id, weapon)
 	local p = self.Players[id]
-	if not p then
+	if not p or (weapon ~= "holstered" and weapon ~= "drawn" and weapon ~= "concealed") then
 		return false
 	end
-	p.Armed = armed and true or false
+	p.Weapon = weapon
+	p.Armed = weapon == "drawn"
 	return true
 end
 

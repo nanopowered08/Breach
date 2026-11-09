@@ -1,0 +1,213 @@
+--!nonstrict
+-- M9a (lockdown phases, awareness) tests: BreachCombat. Run via tests/run.luau or alone: `luau tests/combat.luau`
+local Combat = require("../BreachCombat")
+local Alert = require("../BreachAlert")
+local Trespass = require("../BreachTrespass")
+local Sight = require("../BreachSight")
+local Bots = require("../BreachBots")
+local Nav = require("../BreachNav")
+local Logic = require("../BreachLogic")
+local Props = require("../BreachProps")
+
+local DT = 1 / 20
+
+return function(check)
+	local function kinds(evs, kind) local out = {} for _, e in ipairs(evs) do if kind == nil or e.Kind == kind then out[#out + 1] = e end end return out end
+
+	local counter = 0
+	local function part(name, x, y, z, attrs, eulerY)
+		counter += 1
+		return { Name = name, ClassName = "Part", Path = "DebugMission/Nodes/" .. name .. counter, Id = "p" .. counter, Attrs = attrs or {}, Children = {},
+			Props = { CFrame = { Position = { X = x, Y = y, Z = z }, EulerXYZ = { X = 0, Y = eulerY or 0, Z = 0 } }, Size = { X = 4, Y = 4, Z = 4 } } }
+	end
+	local function folder(name, children) counter += 1 return { Name = name, ClassName = "Folder", Path = "DebugMission/" .. name .. counter, Id = "f" .. counter, Attrs = {}, Children = children or {} } end
+	local function botNode(name, attrs) counter += 1 return { Name = name, ClassName = "BoolValue", Path = "DebugMission/Bots/" .. name, Id = "b" .. counter, Attrs = attrs or {}, Children = {} } end
+	local FACE_PLUS_X = -math.pi / 2
+	local function liveWorld()
+		local cells = { { Index = 1, Node = { Name = "Public" } } }
+		return { Cells = cells, Links = {}, cellAt = function() return cells[1] end }
+	end
+	local function straight(a, b) return { { X = a.X, Y = a.Y or 0, Z = a.Z }, { X = b.X, Y = b.Y or 0, Z = b.Z } } end
+
+	-- botDefs: { X, Z } (all guards of class Sec, facing +X, public space). opts: { enabled, setup, params }
+	local function live(botDefs, opts)
+		opts = opts or {}
+		local list, routes = {}, {}
+		for i, d in ipairs(botDefs) do
+			local rname = "Post" .. i
+			list[#list + 1] = botNode("bot" .. i, { Behavior = "PatrolWalk", Nodes = rname, PatrolCycleLength = 99999, Class = "Sec" })
+			routes[#routes + 1] = folder(rname, { part("Node1", d.X, 0, d.Z or 0, {}, FACE_PLUS_X) })
+		end
+		local botsF, nodesF = folder("Bots", list), folder("Nodes", routes)
+		local m = { folder = function(_, n) if n == "Bots" then return botsF elseif n == "Nodes" then return nodesF end end, byComponent = function() return {} end }
+		local l = Logic.fromSpec({ Globals = {} }, {})
+		local nav = Nav.new({ pathfinder = straight })
+		local w = liveWorld()
+		local bots = Bots.new(m, w, l, nav, { seed = 1 })
+		local pr = Props.fromNodes({}, w, l)
+		pr:addPlayer("p1", -10, 0, 0)
+		local players = Sight.propsPlayers(pr)
+		local sight = Sight.new(w, bots, players)
+		local tr = Trespass.new(w, { Cells = { Public = {} } }, l)
+		tr:attach(sight, bots, players)
+		local al = Alert.new(l, { mission = m, bots = bots, sight = sight, trespass = tr, players = players, world = w })
+		local combat = Combat.new({ bots = bots, sight = sight, alert = al, players = players, setup = opts.setup }, { enabled = opts.enabled ~= false, params = opts.params })
+		local function run(seconds) for _ = 1, math.floor(seconds / DT + 0.5) do l:advance(DT) bots:step(DT) sight:step(DT) tr:step(DT) al:step(DT) combat:step(DT) end end
+		return combat, al, bots, pr, run
+	end
+	local function botId(bots, i) return bots:all()[i].Id end
+
+	do -- off by default
+		local combat, al, bots, pr, run = live({ { X = -20 } }, { enabled = false })
+		pr:setWeapon("p1", "drawn")
+		run(4)
+		check("combat: not opted in: the phase is Off", combat:phase() == "Off")
+		check("combat: not opted in: a drawn weapon in plain view changes nothing (no events, no alert)", #combat:drainEvents() == 0 and al:level() == 0 and combat:knows(botId(bots, 1)) == nil)
+		check("combat: not opted in: a noise is ignored", combat:noise("shot", 0, 0, 0, "p1") == 0)
+	end
+
+	do -- the opt-in key in the mission setup
+		local combat = live({ { X = -20 } }, { enabled = false, setup = { BreachLockdown = "TwoPhase" } })
+		check("combat: MissionSetup.BreachLockdown = \"TwoPhase\" turns it on", combat:phase() == "Calm")
+		local off = live({ { X = -20 } }, { enabled = false, setup = { BreachLockdown = "OnePhase" } })
+		check("combat: any other value leaves it off", off:phase() == "Off")
+	end
+
+	do -- a holstered or concealed weapon is not seen
+		local combat, al, bots, pr, run = live({ { X = -20 } })
+		check("combat: opted in it starts Calm", combat:phase() == "Calm")
+		run(4)
+		check("combat: a holstered weapon in plain view stays Calm", combat:phase() == "Calm" and #kinds(combat:drainEvents(), "WeaponSeen") == 0)
+		check("combat: setWeapon rejects an unknown state", pr:setWeapon("p1", "bazooka") == false and pr:setWeapon("nobody", "drawn") == false)
+		check("combat: concealed is not armed", pr:setWeapon("p1", "concealed") == true and Sight.propsPlayers(pr)()[1].Armed == false and Sight.propsPlayers(pr)()[1].Weapon == "concealed")
+		run(4)
+		check("combat: a concealed weapon is not detected yet [P]", combat:phase() == "Calm")
+	end
+
+	do -- a drawn weapon is seen: Attacking, the guard flees and radios, the lockdown lands with its call
+		local combat, al, bots, pr, run = live({ { X = -20 } })
+		pr:setWeapon("p1", "drawn")
+		run(2)
+		local evs = combat:drainEvents()
+		check("combat: a drawn weapon in view is seen once", #kinds(evs, "WeaponSeen") == 1 and kinds(evs, "WeaponSeen")[1].Player == "p1")
+		check("combat: ... the phase goes straight to Attacking", combat:phase() == "Attacking" and kinds(evs, "PhaseChanged")[1].Phase == "Attacking" and kinds(evs, "PhaseChanged")[1].Why == "WeaponSeen")
+		local k = combat:knows(botId(bots, 1))
+		check("combat: ... and the guard knows where the player is", k ~= nil and k.Player == "p1" and k.Source == "Sight" and math.abs(k.X - -10) < 1e-6)
+		local aev = al:drainEvents()
+		check("combat: ... it radios while it flees (BotRadioStarted), no lockdown yet", #kinds(aev, "BotRadioStarted") == 1 and kinds(aev, "BotRadioStarted")[1].Why == "WeaponSeen" and al:level() == 0)
+		run(5)
+		check("combat: ... the lockdown lands with the call", al:level() == 3)
+		check("combat: ... and the phase stays Attacking", combat:phase() == "Attacking")
+	end
+
+	do -- Alert:fleeAndRadio refuses what it cannot do
+		local combat, al, bots, pr, run = live({ { X = -20 } })
+		check("combat: fleeAndRadio: an unknown player is refused", al:fleeAndRadio(botId(bots, 1), "nobody", "x") == false)
+		check("combat: fleeAndRadio: a guard accepts once", al:fleeAndRadio(botId(bots, 1), "p1", "x") == true)
+		check("combat: fleeAndRadio: ... and not again while it is already on the run", al:fleeAndRadio(botId(bots, 1), "p1", "x") == false)
+		local c2, a2, b2 = live({ { X = -20 } })
+		b2:setFlag(botId(b2, 1), "Dead", true)
+		check("combat: fleeAndRadio: a dead guard is refused", a2:fleeAndRadio(botId(b2, 1), "p1", "x") == false)
+	end
+
+	do -- out of range, or a dead guard: nothing seen
+		local combat, al, bots, pr, run = live({ { X = -20 } })
+		pr:move("p1", -140, 0, 0)
+		pr:setWeapon("p1", "drawn")
+		run(3)
+		check("combat: a drawn weapon out of view range is not seen", combat:phase() == "Calm" and #kinds(combat:drainEvents(), "WeaponSeen") == 0)
+		local c2, a2, b2, p2, r2 = live({ { X = -20 } })
+		b2:setFlag(botId(b2, 1), "Dead", true)
+		p2:setWeapon("p1", "drawn")
+		r2(3)
+		check("combat: a dead guard sees nothing", c2:phase() == "Calm")
+	end
+
+	do -- Searching: lockdown without a weapon seen, guards never know the player
+		local combat, al, bots, pr, run = live({ { X = -20 } })
+		al:lockdown("test")
+		run(0.2)
+		check("combat: lockdown with nobody armed: Searching", combat:phase() == "Searching" and kinds(combat:drainEvents(), "PhaseChanged")[1].Why == "Lockdown")
+		check("combat: Searching: a noise is heard but does not tell the guard where the player is", combat:noise("shot", -10, 0, 0, "p1") == 1 and combat:knows(botId(bots, 1)) == nil)
+		check("combat: ... the event says it was not aware", kinds(combat:drainEvents(), "NoiseHeard")[1].Aware == false)
+		pr:setWeapon("p1", "drawn")
+		run(2)
+		check("combat: Searching: a drawn weapon seen makes it Attacking", combat:phase() == "Attacking" and combat:knows(botId(bots, 1)) ~= nil)
+		check("combat: ... at lockdown the guard does not flee and radio again", #kinds(al:drainEvents(), "BotRadioStarted") == 0)
+	end
+
+	do -- hearing: kind and range
+		local combat, al, bots, pr, run = live({ { X = -20 } })
+		pr:setWeapon("p1", "drawn")
+		run(2)
+		combat:drainEvents()
+		check("combat: default hearing: a shot carries 80, a door 24, a footstep 16", combat:hearingRange("shot") == 80 and combat:hearingRange("door") == 24 and math.abs(combat:hearingRange("footstep") - 16) < 1e-9)
+		check("combat: a shot 50 studs from the guard is heard", combat:noise("shot", 30, 0, 0, "p1") == 1)
+		check("combat: a door 50 studs from the guard is not", combat:noise("door", 30, 0, 0, "p1") == 0)
+		check("combat: a footstep 10 studs from the guard is", combat:noise("footstep", -10, 0, 0, "p1") == 1)
+		check("combat: an unknown noise kind is ignored", combat:noise("whistle", 0, 0, 0, "p1") == 0)
+		local k = combat:knows(botId(bots, 1))
+		check("combat: Attacking: hearing refreshes where the guard thinks the player is", k.Source == "Noise:footstep" and k.X == -10)
+		local c2 = live({ { X = 0 } }, { setup = { SoundTravelDistance = 200 } })
+		check("combat: the mission's SoundTravelDistance scales the range", c2:hearingRange("shot") == 200 and c2:hearingRange("door") == 60)
+	end
+
+	do -- losing track
+		local combat, al, bots, pr, run = live({ { X = -20 } })
+		pr:setWeapon("p1", "drawn")
+		run(2)
+		combat:drainEvents()
+		pr:move("p1", -300, 0, 0)
+		run(15)
+		check("combat: out of sight for 15 s the guard still knows (LoseTrackSeconds 20)", combat:knows(botId(bots, 1)) ~= nil)
+		run(7)
+		local lost = kinds(combat:drainEvents(), "GuardLostTrack")
+		check("combat: after 20 s without seeing or hearing it, the guard loses track", combat:knows(botId(bots, 1)) == nil and #lost == 1 and lost[1].Why == "timeout")
+		check("combat: Attacking never falls back by itself", combat:phase() == "Attacking")
+		local c2, a2, b2, p2, r2 = live({ { X = -20 } }, { params = { LoseTrackSeconds = 3 } })
+		p2:setWeapon("p1", "drawn")
+		r2(1.5)
+		p2:move("p1", -300, 0, 0)
+		r2(6)
+		check("combat: LoseTrackSeconds is a parameter", c2:knows(botId(b2, 1)) == nil)
+	end
+
+	do -- a guard that goes down loses what it knew
+		local combat, al, bots, pr, run = live({ { X = -20 } })
+		pr:setWeapon("p1", "drawn")
+		run(2)
+		combat:drainEvents()
+		bots:setFlag(botId(bots, 1), "Incapacitated", true)
+		run(0.2)
+		local lost = kinds(combat:drainEvents(), "GuardLostTrack")
+		check("combat: an incapacitated guard drops what it knew", #lost == 1 and lost[1].Why == "out" and combat:knows(botId(bots, 1)) == nil)
+	end
+
+	do -- holstering and drawing again is a new sighting
+		local combat, al, bots, pr, run = live({ { X = -20 } }, { params = { LoseTrackSeconds = 100 } })
+		pr:setWeapon("p1", "drawn")
+		run(2)
+		pr:setWeapon("p1", "holstered")
+		run(1)
+		pr:setWeapon("p1", "drawn")
+		run(2)
+		check("combat: drawing the weapon again is seen again", #kinds(combat:drainEvents(), "WeaponSeen") == 2)
+	end
+
+	do -- determinism
+		local function trace()
+			local combat, al, bots, pr, run = live({ { X = -20 }, { X = -40 } })
+			pr:setWeapon("p1", "drawn")
+			run(3)
+			combat:noise("shot", 5, 0, 0, "p1")
+			run(8)
+			local index = {} -- bot ids come from a global counter of the test: compare by position in the list
+			for i, b in ipairs(bots:all()) do index[b.Id] = i end
+			local t = {}
+			for _, e in ipairs(combat:drainEvents()) do t[#t + 1] = ("%s@%.2f:%s"):format(e.Kind, e.Time, tostring(e.Bot and index[e.Bot] or e.Phase or "")) end
+			return table.concat(t, "|")
+		end
+		local a, b = trace(), trace()
+		check("combat: two identical runs give identical events", a == b and #a > 0, a)
+	end
+end

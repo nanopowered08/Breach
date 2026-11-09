@@ -6,15 +6,16 @@
 	The module table `M` is passed in (so this file does not require its siblings):
 
 	    local S = Session.new({ Logic = Logic, Nav = Nav, Bots = Bots, Props = Props, Sight = Sight, Trespass = Trespass,
-	                            Alert = Alert, Hostage = Hostage, Behavior = Behavior }, mission, world, setup, { seed = 416 })
+	                            Alert = Alert, Combat = Combat, Hostage = Hostage, Behavior = Behavior }, mission, world, setup, { seed = 416 })
 	    S:addPlayer("p1", x, y, z)   S:movePlayer("p1", x, y, z)   S:setDisguise("p1", "ProSecurity")
 	    S:aim("p1", botId)   S:answer(botId, "p1", "bluff")
 	    S:step(dt)   S:run(seconds)
 	    S:drainLog()        -- every event of every layer since the last call, tagged {Source = "Bots"|"Alert"|"Hostage"|"Behavior"}
 	    S:signature()       -- a string of the whole run so far, for "two runs are identical"
 
-	Step order [tested]: logic:advance, bots, sight, trespass, alert (it drains the trespass events), hostage, behavior.
-	Exposed layers: S.Logic S.Nav S.Bots S.Props S.Sight S.Trespass S.Alert S.Hostage S.Behavior.
+	Step order [tested]: logic:advance, bots, sight, trespass, alert (it drains the trespass events), combat (M9a, opt-in: does nothing unless the
+	mission sets MissionSetup.BreachLockdown = "TwoPhase" or opts.twoPhase), hostage, behavior.
+	Exposed layers: S.Logic S.Nav S.Bots S.Props S.Sight S.Trespass S.Alert S.Combat S.Hostage S.Behavior.
 ]==]
 
 local Session = {}
@@ -39,10 +40,11 @@ function Session.new(M, mission, world, setup, opts)
 	tr:attach(sight, bots, players)
 	local alert = M.Alert.new(logic, { mission = mission, bots = bots, sight = sight, trespass = tr, players = players, world = world, params = opts.alertParams, hidingSpots = opts.hidingSpots })
 	sight.LevelFn = function() return alert:level() end -- the higher the alert level, the faster guards notice (Calm 0.9x, Normal 1x, Alert 1.1x)
+	local combat = M.Combat and M.Combat.new({ bots = bots, sight = sight, alert = alert, players = players, setup = setup }, { enabled = opts.twoPhase == true, params = opts.combatParams })
 	local hostage = M.Hostage.new(logic, { mission = mission, bots = bots, nav = nav, players = players, props = props, sight = sight, world = world, alert = alert, params = opts.hostageParams, altTriggers = opts.altTriggers })
 	local behavior = M.Behavior.new(logic, { mission = mission, bots = bots, nav = nav, alert = alert, players = players, params = opts.behaviorParams })
 	return setmetatable({
-		Logic = logic, Nav = nav, Bots = bots, Props = props, Sight = sight, Trespass = tr, Alert = alert, Hostage = hostage, Behavior = behavior,
+		Logic = logic, Nav = nav, Bots = bots, Props = props, Sight = sight, Trespass = tr, Alert = alert, Combat = combat, Hostage = hostage, Behavior = behavior,
 		Players = players, Time = 0, Log = {}, Trace = {},
 	}, Sim)
 end
@@ -84,6 +86,10 @@ function Sim:step(dt)
 	self.Trespass:step(dt)
 	self.Alert:step(dt)
 	collect(self, "Alert", self.Alert:drainEvents())
+	if self.Combat then
+		self.Combat:step(dt)
+		collect(self, "Combat", self.Combat:drainEvents())
+	end
 	self.Hostage:step(dt)
 	collect(self, "Hostage", self.Hostage:drainEvents())
 	self.Behavior:step(dt)

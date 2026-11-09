@@ -225,6 +225,24 @@ return function(check)
 		check("props: an empty library places nothing", #noLib == 0)
 	end
 
+	-------------------------------------------------------------------------------- players: stance, armed and weapon reach the engine
+	do
+		local log = {}
+		local props = {
+			setStance = function(_, id, v) log[#log + 1] = "stance:" .. id .. ":" .. v end,
+			setWeapon = function(_, id, v) log[#log + 1] = "weapon:" .. id .. ":" .. v end,
+			setArmed = function(_, id, v) log[#log + 1] = "armed:" .. id .. ":" .. tostring(v) end,
+			player = function() return nil end,
+		}
+		local session = { Props = props, addPlayer = function(_, id) log[#log + 1] = "add:" .. id end, movePlayer = function() end, setDisguise = function() end }
+		local a = Core.new(session, {})
+		a:syncPlayers({ { Id = "p1", X = 0, Y = 0, Z = 0, Stance = "crouch", Armed = true, Weapon = "concealed" }, { Id = "p2", X = 0, Y = 0, Z = 0, Armed = false } })
+		local text = table.concat(log, ",")
+		check("players: Weapon reaches Props:setWeapon and wins over Armed", string.find(text, "weapon:p1:concealed", 1, true) ~= nil and string.find(text, "armed:p1", 1, true) == nil, text)
+		check("players: without a Weapon, Armed still reaches Props:setArmed", string.find(text, "armed:p2:false", 1, true) ~= nil, text)
+		check("players: the stance still reaches Props:setStance", string.find(text, "stance:p1:crouch", 1, true) ~= nil)
+	end
+
 	-------------------------------------------------------------------------------- a real session (only when local mission data is present)
 	local okE, emb = pcall(require, "../../breach-codec/tests/_embedded")
 	if not okE then

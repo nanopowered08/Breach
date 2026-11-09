@@ -11,7 +11,7 @@
 	        ApplyLighting = true,     -- apply the mission's LightingSettings preset from ReplicatedStorage.Assets.LightingSettings (default true)
 	        PropsLibrary = nil,       -- a Folder of prop Models; default ReplicatedStorage.Assets.Props
 	        ShowBarriers = false, ShowNodes = false, LogEvents = false,
-	        Seed = nil, Difficulty = 3, BotYOffset = 2.5, PlayerYOffset = 0,
+	        Seed = nil, TwoPhase = false, Difficulty = 3, BotYOffset = 2.5, PlayerYOffset = 0,
 	        -- the seed: Workspace attribute "BreachSeed" first, then Seed, else a fresh random one each run (printed, and kept in the attribute "BreachSeedInUse")
 	    })
 	    run.Stop()
@@ -42,6 +42,7 @@ local M = {
 	Shuffle = require("../../breach-codec/BreachShuffle"),
 	Trespass = require("../../breach-codec/BreachTrespass"),
 	Alert = require("../../breach-codec/BreachAlert"),
+	Combat = require("../../breach-codec/BreachCombat"),
 	Hostage = require("../../breach-codec/BreachHostage"),
 	Behavior = require("../../breach-codec/BreachBehavior"),
 }
@@ -93,7 +94,7 @@ function Adapter.start(Breach, options)
 	end
 	print(("[Breach] seed %d (%s)"):format(seed, seedSource))
 	workspace:SetAttribute("BreachSeedInUse", seed)
-	local session, info = Core.loadMission(M, code, { seed = seed, difficulty = options.Difficulty })
+	local session, info = Core.loadMission(M, code, { seed = seed, difficulty = options.Difficulty, twoPhase = options.TwoPhase == true })
 	if not session then
 		warn("[Breach] could not load the mission: " .. tostring(info))
 		return nil, info
