@@ -1,5 +1,8 @@
 # BreachEngine HANDOFF (updated after M9.0; docs v0.25, suite = 1656 passing)
 
+## M11.0 shuffle survey (docs v0.27, PR "m11-0-survey")
+`breach-codec/src/shuffle.luau` -> `BreachShuffle.luau`: `survey(mission)` and `report(survey, maxLines)`, information only (plan: `docs/BreachEngine_M11_Randomisation_Plan.md`, approved by the owner's merge). The adapter prints `[Breach] shuffle: ...` lines after loading (silence with `ShuffleSurvey = false`). **Owner: please run the Blacksite and send the `[Breach] shuffle:` lines**: they show the attributes and the values of `ShuffleTag`, `Index`, `MatchVariable` and `ResolvePriority`, which decide the rules of M11.1 (the plan's one open question). Tests: shuffle 21, adapter 58. Already implemented elsewhere and not part of M11.1: `Condition` on folders (BreachProps) and the seeded `VariableShuffle`.
+
 ## Seed (adapter v0.3, PR "adapter-seed")
 Owner decision (Nov 2026): the run's seed comes from the Workspace attribute **`BreachSeed`** (a whole number 0..4294967295, or a numeric string); if it is not set, the `Seed` option of `Adapter.start`; if neither, a **fresh random seed each run** (the old fixed 416 default is gone). The seed in use is printed (`[Breach] seed N (source)`) and kept in the Workspace attribute `BreachSeedInUse`, so a run can be replayed by copying it into `BreachSeed`. `Core.resolveSeed` does the choice (tested offline: adapter core 58). It already drives everything seeded today (`VariableShuffle`, `RNG`, `SHUFFLE`, bot picks). The physical room layout (`PartCollection`/`ShuffleTarget`) is M11: see `docs/BreachEngine_M11_Randomisation_Plan.md` (PR "m11-plan"), waiting for the owner's OK.
 

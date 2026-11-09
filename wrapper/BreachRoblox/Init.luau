@@ -39,6 +39,7 @@ local M = {
 	Bots = require("../../breach-codec/BreachBots"),
 	Props = require("../../breach-codec/BreachProps"),
 	Sight = require("../../breach-codec/BreachSight"),
+	Shuffle = require("../../breach-codec/BreachShuffle"),
 	Trespass = require("../../breach-codec/BreachTrespass"),
 	Alert = require("../../breach-codec/BreachAlert"),
 	Hostage = require("../../breach-codec/BreachHostage"),
@@ -98,6 +99,16 @@ function Adapter.start(Breach, options)
 		return nil, info
 	end
 	local host = RobloxHost.new(options)
+
+	-- M11.0: what the mission declares about shuffling its layout (PartCollection / ShuffleTarget, folder-level options). Information only: nothing is moved yet.
+	if options.ShuffleSurvey ~= false then
+		local okS, lines = pcall(function() return M.Shuffle.report(M.Shuffle.survey(info.Mission), 25) end)
+		if okS then
+			for _, line in ipairs(lines) do print("[Breach] shuffle: " .. line) end
+		else
+			print("[Breach] shuffle survey failed: " .. tostring(lines))
+		end
+	end
 
 	-- The mission's lighting preset (MissionSetup.LightingSettings), taken from the prop library's presets. Set ApplyLighting = false to keep the place's own.
 	local setting = info.Setup and info.Setup.LightingSettings

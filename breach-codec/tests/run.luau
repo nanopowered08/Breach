@@ -610,6 +610,9 @@ require("./hostage_tests")(check)
 require("./behavior_tests")(check)
 require("./combatdata_tests")(check)
 
+-- M11.0: shuffle survey
+require("./shuffle_tests")(check)
+
 -- M8f: seeded playthroughs through BreachSession
 require("./playthrough_tests")(check)
 
