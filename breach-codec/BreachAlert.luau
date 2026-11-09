@@ -26,9 +26,11 @@
 	Condition [R: attributes; P: clamp(level + Amount, Min, Max); real triples (3,3,3) (1,1,1) (2,2,2) (1,2,2)].
 
 	Player-observed rules [R = the owner's gameplay observations]:
-	  * a MAJOR trespass: the witness runs to a hiding spot and radios LOCKDOWN; killing/subduing it first cancels the call [R];
-	    bumping into a guard never makes them shoot [R]. Hiding spot priority [R]: (1) far from the player but close enough to run back
-	    and ask, else it does not hide; (2) easy to get to and back; (3) covers the line of fire if a weapon was seen.
+	  * a MAJOR trespass: the witness radios LOCKDOWN; killing/subduing it first cancels the call [R]; bumping into a guard never
+	    makes them shoot [R]. A guard FLEES only when it sees that the player is ARMED [R: owner, Nov 2026], and it talks into the radio
+	    WHILE it flees, not after it arrived [R]. Against an unarmed player it does not run: it radios where it stands [P: the owner has
+	    not said what an unarmed major trespass makes a guard do instead]. Hiding spot priority [R]: (1) far from the player but close
+	    enough to run back and ask, else it does not hide; (2) easy to get to and back; (3) covers the line of fire.
 	  * a MINOR trespass: the guard walks up and asks what you were doing. King Street style (alert +1 first) vs Bathurst Street style
 	    (only asks) belongs to the GUARD (a tag, `params.MinorRaiseTags`), not to the mission [R]. A bluff that works silences it for a while.
 	    Say you are leaving: you get LeaveSeconds to walk out, else you are escorted [owner idea]. A failed or unanswered question is a
@@ -48,11 +50,10 @@ Alert.Defaults = {
 	MinorRaisesAlert = false, -- fallback for a guard with no tag: does a minor trespass raise the alert by one first?
 	MinorRaiseTags = {}, -- ServerTags that make a guard raise it (King Street style); the owner thinks it is a tag on the guard [P: name unknown]
 	MinorRaiseAmount = 1,
-	RadioSeconds = 4, -- from "radio started" to the call landing [P]
+	RadioSeconds = 4, -- from "radio started" to the call landing; a fleeing guard radios while it runs, so this counts from the moment it spots an armed player [P: the time]
 	CommentSeconds = 1.5, -- a bot says its line this long before it radios an anomaly [P]
 	ReductionSeconds = 60, -- StandardRadioAlertReduction: calm for this long and Alert (2) drops to Normal (1) [P: the times]
 	ResetSeconds = 60, -- ... and Normal (1) drops to Calm (0)
-	FleeMaxSeconds = 20, -- a witness that cannot reach its hiding spot radios where it stands [P]
 	QuestionRange = 4, -- studs: close enough to ask [P]
 	QuestionSeconds = 8, -- time the player has to answer [P]
 	SilenceSeconds = 60, -- after a good answer the same guard does not ask again [P]
@@ -417,6 +418,9 @@ function Sim:_cancel(botId, why)
 	end
 end
 
+-- A major trespass is answered with a radio call. Only an ARMED player makes the guard flee (to a hiding spot), and the call is made
+-- WHILE it runs: BotRadioStarted is emitted at once and the call lands RadioSeconds later wherever the guard is [R]. An unarmed player
+-- does not make it run: it radios where it stands [P]. Killing or subduing it before the call lands cancels the call [R].
 function Sim:_startFlee(bot, pl, why, rule)
 	local r = self.Reaction[bot.Id]
 	if r and r.Kind == "Flee" then
@@ -425,14 +429,17 @@ function Sim:_startFlee(bot, pl, why, rule)
 	if r then
 		self:_cancel(bot.Id, "superseded")
 	end
-	local x, y, z = self:_hidingSpot(bot, pl)
-	self.Reaction[bot.Id] = { Kind = "Flee", Phase = "Fleeing", Player = pl and pl.Id, Why = why, Rule = rule, Timer = self.Params.FleeMaxSeconds }
+	local armed = (pl and (pl.Armed or pl.WeaponDrawn)) and true or false
+	local x, y, z
+	if armed then
+		x, y, z = self:_hidingSpot(bot, pl)
+	end
+	self.Reaction[bot.Id] = { Kind = "Flee", Phase = x and "Fleeing" or "Radioing", Player = pl and pl.Id, Why = why, Rule = rule, Armed = armed, Timer = self.Params.RadioSeconds }
 	emit(self, "BotSay", { Bot = bot.Id, Line = "TrespassMajor", Text = "Hey! You can't be here!" })
 	if x then
 		self.Bots:command(bot.Id, "Fleeing", x, y, z)
-	else -- no good hiding spot: don't hide, radio where it stands
-		local mine = self.Reaction[bot.Id]
-		mine.Phase, mine.Timer = "Radioing", self.Params.RadioSeconds
+		emit(self, "BotRadioStarted", { Bot = bot.Id, Why = why, Fleeing = true })
+	else -- unarmed player, or no good hiding spot: don't run, radio where it stands
 		self.Bots:hold(bot.Id, "Radioing")
 		emit(self, "BotRadioStarted", { Bot = bot.Id, Why = why, Hidden = false })
 	end
@@ -708,20 +715,16 @@ function Sim:step(dt)
 			if out(bot) then
 				self:_cancel(id, bot and (bot.Flags.Dead and "dead" or bot.State == "Despawned" and "despawned" or "incapacitated") or "gone")
 			elseif r.Kind == "Flee" then
-				if r.Phase == "Fleeing" then
-					r.Timer -= dt
-					if bot.State == "Fleeing" or r.Timer <= 0 then
-						r.Phase, r.Timer = "Radioing", p.RadioSeconds
-						self.Bots:hold(id, "Radioing")
-						emit(self, "BotRadioStarted", { Bot = id, Why = r.Why })
-					end
-				else
-					r.Timer -= dt
-					if r.Timer <= 0 then
-						self.Reaction[id] = nil
-						self:lockdown("Radio:" .. tostring(r.Why))
-						self.Bots:resume(id)
-					end
+				-- the radio call and the flight run at the same time: the call lands RadioSeconds after it started, wherever the guard is
+				r.Timer -= dt
+				if r.Phase == "Fleeing" and bot.State == "Fleeing" then -- reached the hiding spot: it waits there for the call to land
+					r.Phase = "Radioing"
+					self.Bots:hold(id, "Radioing")
+				end
+				if r.Timer <= 0 then
+					self.Reaction[id] = nil
+					self:lockdown("Radio:" .. tostring(r.Why))
+					self.Bots:resume(id)
 				end
 			elseif r.Kind == "Question" then
 				local pl = self:_player(r.Player)
