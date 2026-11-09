@@ -11,7 +11,8 @@
 	        ApplyLighting = true,     -- apply the mission's LightingSettings preset from ReplicatedStorage.Assets.LightingSettings (default true)
 	        PropsLibrary = nil,       -- a Folder of prop Models; default ReplicatedStorage.Assets.Props
 	        ShowBarriers = false, ShowNodes = false, LogEvents = false,
-	        Seed = 416, Difficulty = 3, BotYOffset = 2.5, PlayerYOffset = 0,
+	        Seed = nil, Difficulty = 3, BotYOffset = 2.5, PlayerYOffset = 0,
+	        -- the seed: Workspace attribute "BreachSeed" first, then Seed, else a fresh random one each run (printed, and kept in the attribute "BreachSeedInUse")
 	    })
 	    run.Stop()
 
@@ -81,7 +82,17 @@ function Adapter.start(Breach, options)
 		return nil, why
 	end
 	local t0 = os.clock()
-	local session, info = Core.loadMission(M, code, { seed = options.Seed, difficulty = options.Difficulty })
+	-- The seed decides everything the mission randomises (variables, shuffles, patrol picks): the Workspace attribute "BreachSeed", else options.Seed,
+	-- else a fresh random one. The one in use is printed and kept in the Workspace attribute "BreachSeedInUse", so a run can be replayed.
+	local seed, seedSource, ignoredSeed = Core.resolveSeed(workspace:GetAttribute("BreachSeed"), options.Seed, function()
+		return Random.new():NextInteger(1, 2147483646)
+	end)
+	if ignoredSeed ~= nil then
+		warn(("[Breach] the BreachSeed attribute %q is not a whole number from 0 to 4294967295; ignored"):format(tostring(ignoredSeed)))
+	end
+	print(("[Breach] seed %d (%s)"):format(seed, seedSource))
+	workspace:SetAttribute("BreachSeedInUse", seed)
+	local session, info = Core.loadMission(M, code, { seed = seed, difficulty = options.Difficulty })
 	if not session then
 		warn("[Breach] could not load the mission: " .. tostring(info))
 		return nil, info

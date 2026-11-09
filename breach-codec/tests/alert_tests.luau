@@ -407,15 +407,75 @@ return function(check)
 		al.Sight = realSight
 	end
 
-	do -- a real flee goes to the chosen spot, and a witness with no spot radios in place
+	-- Guards flee ONLY from an armed player, and they radio WHILE they flee [R: owner, Nov 2026]
+	do -- armed: the guard runs to the hiding spot and the radio call starts at once, landing RadioSeconds later wherever it is
 		local al, bots, pr, l, run = live({ { Class = "Sec", X = 20 } })
 		al.HidingSpots = { { X = 70, Z = 0 } }
+		pr:setArmed("p1", true)
 		pr:move("p1", 30, 0, 0)
-		run(7)
+		run(1.5)
+		local early = al:drainEvents()
+		local radio = kinds(early, "BotRadioStarted")
+		local x1 = bots:position(botId(bots, 1))
+		check("flee: an armed player: the radio call starts as soon as the guard flees (not after it arrived)", #radio == 1 and radio[1].Fleeing == true)
+		check("flee: ... while the guard is still running to the spot", string.sub(bots:all()[1].State, 1, 6) == "Going:" and x1 < 65, bots:all()[1].State .. " x=" .. tostring(x1))
+		check("flee: ... and no lockdown yet", al:level() == 0)
+		run(4)
+		check("flee: the call lands RadioSeconds after it started, even if the guard has not reached the spot: lockdown", al:level() == 3)
+		check("flee: ... and the guard is not left held", bots:all()[1].State ~= "Radioing" and bots:all()[1].Command == nil)
+	end
+
+	do -- armed, but the spot is close: the guard arrives first and waits there for the call to land
+		local al, bots, pr, l, run = live({ { Class = "Sec", X = 20 } }, { RadioSeconds = 20 })
+		al.HidingSpots = { { X = 70, Z = 0 } }
+		pr:setArmed("p1", true)
+		pr:move("p1", 30, 0, 0)
+		run(12)
 		local x = bots:position(botId(bots, 1))
-		check("hide: the witness runs to the hiding spot before radioing", x > 65 and #kinds(al:drainEvents(), "BotRadioStarted") == 1)
+		check("flee: a long call: the guard reaches the hiding spot and waits there", x > 65 and bots:all()[1].State == "Radioing" and al:level() == 0, bots:all()[1].State .. " x=" .. tostring(x))
+		run(12)
+		check("flee: ... and the lockdown lands when the call does", al:level() == 3)
+	end
+
+	do -- unarmed: the guard does NOT flee; it radios where it stands [P]
+		local al, bots, pr, l, run = live({ { Class = "Sec", X = 20 } })
+		al.HidingSpots = { { X = 70, Z = 0 } }
+		pr:move("p1", 30, 0, 0) -- same setup as the armed test, only the weapon is missing
+		run(1.5)
+		local evs = al:drainEvents()
+		local radio = kinds(evs, "BotRadioStarted")
+		local x = bots:position(botId(bots, 1))
+		check("flee: an unarmed player does not make the guard run: it radios in place", #radio == 1 and radio[1].Fleeing == nil and radio[1].Hidden == false and bots:all()[1].State == "Radioing" and x < 30, bots:all()[1].State .. " x=" .. tostring(x))
+		run(6)
+		check("flee: ... and the call still lands as lockdown", al:level() == 3)
+	end
+
+	do -- armed with no usable spot: radio in place (as before)
+		local al, bots, pr, l, run = live({ { Class = "Sec", X = 20 } })
+		al.HidingSpots = {}
+		pr:setArmed("p1", true)
+		pr:move("p1", 30, 0, 0)
+		run(1.5)
+		check("flee: armed but no hiding spot: the guard radios where it stands", bots:all()[1].State == "Radioing" and #kinds(al:drainEvents(), "BotRadioStarted") == 1)
+	end
+
+	do -- the armed flag travels from Props through the players adapter
+		local al, bots, pr = live({ { Class = "Sec", X = 20 } })
+		local fn = Sight.propsPlayers(pr)
+		check("armed: a player is unarmed by default", fn()[1].Armed == false)
+		check("armed: Props:setArmed reaches the players list, and can be cleared", pr:setArmed("p1", true) and fn()[1].Armed == true and pr:setArmed("p1", false) and fn()[1].Armed == false)
+		check("armed: an unknown player is refused", pr:setArmed("nobody", true) == false)
+	end
+
+	do -- a guard stopped while fleeing never completes the call
+		local al, bots, pr, l, run = live({ { Class = "Sec", X = 20 } })
+		al.HidingSpots = { { X = 70, Z = 0 } }
+		pr:setArmed("p1", true)
+		pr:move("p1", 30, 0, 0)
+		run(2)
+		bots:setFlag(botId(bots, 1), "Incapacitated", true)
 		run(8)
-		check("hide: ... and the lockdown still lands", al:level() == 3)
+		check("flee: killed or subdued on the run: the call is cancelled, no lockdown", al:level() == 0 and #kinds(al:drainEvents(), "BotRadioCancelled") == 1)
 	end
 
 	do

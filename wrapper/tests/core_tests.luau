@@ -4,6 +4,32 @@
 local Core = require("../BreachRoblox/Core")
 
 return function(check)
+	-------------------------------------------------------------------------------- the seed
+	do
+		local function rnd() return 777 end
+		local s, src = Core.resolveSeed(1234, 5, rnd)
+		check("seed: the BreachSeed attribute wins", s == 1234 and src == "BreachSeed")
+		s, src = Core.resolveSeed("99", 5, rnd)
+		check("seed: a numeric string works in the attribute", s == 99 and src == "BreachSeed")
+		s, src = Core.resolveSeed(nil, 5, rnd)
+		check("seed: no attribute: the Seed option", s == 5 and src == "Seed option")
+		s, src = Core.resolveSeed(nil, nil, rnd)
+		check("seed: neither: a fresh random one", s == 777 and src == "random")
+		s, src = Core.resolveSeed(0, nil, rnd)
+		check("seed: zero is a valid seed", s == 0 and src == "BreachSeed")
+		local ign
+		s, src, ign = Core.resolveSeed("abc", 7, rnd)
+		check("seed: a bad attribute is ignored (and reported), the option is used", s == 7 and src == "Seed option" and ign == "abc")
+		s, src, ign = Core.resolveSeed(-3, nil, rnd)
+		check("seed: a negative attribute is ignored", s == 777 and src == "random" and ign == -3)
+		s = Core.resolveSeed(1.5, nil, rnd)
+		check("seed: a fraction is ignored", s == 777)
+		s = Core.resolveSeed(4294967296, nil, rnd)
+		check("seed: 2^32 is out of range", s == 777)
+		s = Core.resolveSeed(0/0, nil, rnd)
+		check("seed: NaN is ignored", s == 777)
+	end
+
 	-------------------------------------------------------------------------------- fakes
 	local function fakeSession(bots)
 		local S = { bots = bots or {}, pos = {}, vars = { Mission_AlertLevel = 0 }, log = {}, steps = {}, calls = {}, players = {} }

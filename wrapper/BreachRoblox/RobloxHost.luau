@@ -6,7 +6,7 @@
 	    Map/      the exported geometry (Geometry and Barrier folders), built in chunks so the server does not freeze
 	    Bots/     one simple rig per engine bot (body, head, name + state label); moved every frame from the engine position
 	    Debug/    optional: the patrol nodes
-	Reads players from the Players service. A character can set the attribute "BreachStance" to "stand", "crouch" or "sprint".
+	Reads players from the Players service. A character can set the attribute "BreachStance" to "stand", "crouch" or "sprint", and "BreachArmed" (true/false; default: holding a Tool). Guards flee only from an armed player.
 	Sets Workspace attribute "BreachAlertLevel" (0..3) when the alert level changes.
 ]==]
 
@@ -142,7 +142,10 @@ function Host:getPlayers()
 		local hrp = char and char:FindFirstChild("HumanoidRootPart")
 		if hrp then
 			local p = hrp.Position
-			out[#out + 1] = { Id = tostring(plr.UserId), X = p.X, Y = p.Y + self.PlayerYOffset, Z = p.Z, Stance = char:GetAttribute("BreachStance") or "stand" }
+			-- armed: the attribute "BreachArmed" (true/false) wins; without it a character holding a Tool counts as armed [P]
+			local armed = char:GetAttribute("BreachArmed")
+			if armed == nil then armed = char:FindFirstChildOfClass("Tool") ~= nil end
+			out[#out + 1] = { Id = tostring(plr.UserId), X = p.X, Y = p.Y + self.PlayerYOffset, Z = p.Z, Stance = char:GetAttribute("BreachStance") or "stand", Armed = armed and true or false }
 		end
 	end
 	return out
