@@ -26,6 +26,29 @@ Core.Defaults = {
 	difficulty = 3,
 }
 
+-- Which seed a run uses [R: owner, Nov 2026]. In order: (1) the Workspace attribute "BreachSeed", (2) the `Seed` option of Adapter.start, (3) a fresh
+-- random seed (`randomFn()`), like the real game, which draws one per mission. The attribute and the option are a non-negative whole number (or a
+-- numeric string) below 2^32; anything else is ignored and reported as the third result so the host can warn. Returns seed, source, ignoredValue.
+function Core.resolveSeed(attr, optionSeed, randomFn)
+	local function asSeed(v)
+		if type(v) == "string" then v = tonumber(v) end
+		if type(v) == "number" and v == v and v >= 0 and v < 4294967296 and v == math.floor(v) then
+			return v
+		end
+		return nil
+	end
+	local a = asSeed(attr)
+	if a then
+		return a, "BreachSeed"
+	end
+	local ignored = (attr ~= nil) and attr or nil
+	local o = asSeed(optionSeed)
+	if o then
+		return o, "Seed option", ignored
+	end
+	return randomFn(), "random", ignored
+end
+
 local Adapter = {}
 Adapter.__index = Adapter
 
