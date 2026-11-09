@@ -22,6 +22,9 @@
 	Noticing: the meter fills at DetectionSpeed / T(d) per second, where T runs from NoticeNear (point blank) to NoticeFar
 	(at the edge of the range); it falls at Decay per second when the player is not seen.  DetectionSpeed is a multiplier
 	taken from the bot (real values 0.6 .. 1; lower = slower to notice).
+	The alert level scales it too [R: community report passed on by the owner, Nov 2026]: the higher the level, the faster guards
+	notice: Calm 0.9x, Normal 1x, Alert 1.1x. Lockdown was not given: it keeps Alert's 1.1x [P]. The host/session supplies the level
+	through `sight.LevelFn` (BreachSession wires it to the alert); with no LevelFn the factor is 1.
 ]==]
 
 local Sight = {}
@@ -41,6 +44,7 @@ Sight.Defaults = {
 	EyeHeight = 4.5,
 	TargetHeight = 3,
 	LosStep = 1.5, -- studs between line-of-sight samples
+	AlertSpeed = { [0] = 0.9, [1] = 1, [2] = 1.1, [3] = 1.1 }, -- detection speed factor by alert level (Calm, Normal, Alert, Lockdown) [R 0..2, P 3]
 }
 
 local function clamp(x, lo, hi)
@@ -60,7 +64,7 @@ function Sight.new(world, bots, playersFn, opts)
 		params[k] = v
 	end
 	local self = setmetatable({
-		World = world, Bots = bots, PlayersFn = playersFn, Blocked = opts.blocked, Params = params,
+		World = world, Bots = bots, PlayersFn = playersFn, Blocked = opts.blocked, Params = params, LevelFn = opts.alertLevel,
 		Time = 0, Pairs = {}, Events = {}, Adjacent = {},
 	}, Sim)
 	-- cells that touch (joined by a link) may see into each other
@@ -78,6 +82,15 @@ function Sight.new(world, bots, playersFn, opts)
 		end
 	end
 	return self
+end
+
+-- The detection speed factor for the current alert level (1 when there is no LevelFn).
+function Sim:alertFactor()
+	local level = self.LevelFn and self.LevelFn()
+	if type(level) ~= "number" then
+		return 1
+	end
+	return self.Params.AlertSpeed[clamp(math.floor(level), 0, 3)] or 1
 end
 
 -- Adapter: BreachProps' players as the playersFn Sight wants.
@@ -231,7 +244,7 @@ function Sim:step(dt)
 			if visible then
 				local range = p.ViewRange * (p.StanceRange[pl.Stance or "stand"] or 1)
 				local t = p.NoticeNear + (p.NoticeFar - p.NoticeNear) * clamp(d / range, 0, 1)
-				st.Meter = clamp(st.Meter + (bot.DetectionSpeed or 1) / t * dt, 0, 1)
+				st.Meter = clamp(st.Meter + (bot.DetectionSpeed or 1) * self:alertFactor() / t * dt, 0, 1)
 				st.Unseen = 0
 				if not st.Visible then
 					st.Visible = true
