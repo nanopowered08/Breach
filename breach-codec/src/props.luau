@@ -215,6 +215,17 @@ function Sim:setStance(id, stance)
 	return true
 end
 
+-- Is the player carrying a drawn weapon? Guards flee only from an armed player (BreachAlert) [R]. Set by the host (BreachRoblox:
+-- the character attribute "BreachArmed", else an equipped Tool [P]); false by default.
+function Sim:setArmed(id, armed)
+	local p = self.Players[id]
+	if not p then
+		return false
+	end
+	p.Armed = armed and true or false
+	return true
+end
+
 -- Does a CLOSED door lie across the segment a -> b? (an open door and a glass door do not block sight) [P: glass]
 function Sim:sightBlocked(ax, ay, az, bx, by, bz)
 	for _, d in ipairs(self.All) do

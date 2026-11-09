@@ -12,7 +12,7 @@
 	    sight:noticedBy(playerId) -> { botId, ... }    sight:isNoticed(playerId)
 	    sight:drainEvents()  -- SightSeen SightSuspicious SightNoticed SightLost    { Bot, Player, Time, Meter, Distance }
 
-	playersFn() -> { { Id =, X =, Y =, Z =, Stance = "stand" | "crouch" | "sprint", Exited = bool }, ... }   (Sight.propsPlayers(sim) adapts BreachProps)
+	playersFn() -> { { Id =, X =, Y =, Z =, Stance = "stand" | "crouch" | "sprint", Exited = bool, Disguise = string?, Armed = bool? }, ... }   (Sight.propsPlayers(sim) adapts BreachProps)
 
 	A bot sees a player when ALL of these hold [P: every number is a default in Sight.Defaults, to be corrected by feel]:
 	  * within ViewRange x the stance factor (crouching shrinks it, sprinting stretches it);
@@ -86,7 +86,7 @@ function Sight.propsPlayers(sim)
 		local out = {}
 		for _, id in ipairs(sim.Order) do
 			local p = sim.Players[id]
-			out[#out + 1] = { Id = p.Id, X = p.Pos[1], Y = p.Pos[2], Z = p.Pos[3], Stance = p.Stance or "stand", Exited = p.Exited, Disguise = p.Disguise }
+			out[#out + 1] = { Id = p.Id, X = p.Pos[1], Y = p.Pos[2], Z = p.Pos[3], Stance = p.Stance or "stand", Exited = p.Exited, Disguise = p.Disguise, Armed = p.Armed or false }
 		end
 		return out
 	end
