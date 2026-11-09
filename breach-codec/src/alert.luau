@@ -460,6 +460,21 @@ function Sim:_raisesOnMinor(bot)
 end
 
 -- A bot radios right where it stands (no hiding spot): the call lands as lockdown after RadioSeconds. Used by BreachHostage
+-- A guard sees an ARMED player (BreachCombat, M9a): it flees and radios at the same time, exactly as for a major trespass by an armed player [R].
+function Sim:fleeAndRadio(botId, playerId, why)
+	local bot = self.Bots:bot(botId)
+	if out(bot) or bot.Flags.Hostage then
+		return false
+	end
+	local pl = self:_player(playerId)
+	local r = self.Reaction[botId]
+	if not pl or (r and r.Kind == "Flee") then
+		return false
+	end
+	self:_startFlee(bot, pl, why, "Weapon")
+	return true
+end
+
 -- when an armed guard stops being a hostage: "radioing in before shooting" [R].
 function Sim:radioIn(botId, why)
 	local bot = self.Bots:bot(botId)

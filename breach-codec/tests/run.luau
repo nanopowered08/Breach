@@ -610,6 +610,9 @@ require("./hostage_tests")(check)
 require("./behavior_tests")(check)
 require("./combatdata_tests")(check)
 
+-- M9a: lockdown phases, awareness
+require("./combat_tests")(check)
+
 -- M11.0: shuffle survey
 require("./shuffle_tests")(check)
 
