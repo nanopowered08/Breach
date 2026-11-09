@@ -17,6 +17,7 @@ JOBS = [("src/body.luau", [("--@@TABLES@@", "src/tables.inc"), ("--@@JSON@@", "s
         ("src/behavior.luau", [], "BreachBehavior.luau"),
         ("src/session.luau", [], "BreachSession.luau"),
         ("src/combat_data.luau", [], "BreachCombatData.luau"),
+        ("src/shuffle.luau", [], "BreachShuffle.luau"),
         ("src/bots.luau", [("--@@RANDOM@@", "src/random.luau")], "BreachBots.luau"),
         ("src/props.luau", [("--@@CFRAME@@", "src/cframe.luau")], "BreachProps.luau"),
         ("src/script_standalone.luau", [("--@@RANDOM@@", "src/random.luau"), ("--@@EXPR@@", "src/expr.luau"), ("--@@CFRAME@@", "src/cframe.luau"), ("--@@SCRIPT@@", "src/script.luau")], "BreachScript.luau"),
