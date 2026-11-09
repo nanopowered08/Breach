@@ -28,8 +28,7 @@
 	Player-observed rules [R = the owner's gameplay observations]:
 	  * a MAJOR trespass: the witness radios LOCKDOWN; killing/subduing it first cancels the call [R]; bumping into a guard never
 	    makes them shoot [R]. A guard FLEES only when it sees that the player is ARMED [R: owner, Nov 2026], and it talks into the radio
-	    WHILE it flees, not after it arrived [R]. Against an unarmed player it does not run: it radios where it stands [P: the owner has
-	    not said what an unarmed major trespass makes a guard do instead]. Hiding spot priority [R]: (1) far from the player but close
+	    WHILE it flees, not after it arrived [R]. Against an unarmed player it does NOT run: it still radios for LOCKDOWN, where it stands [R: owner]. Hiding spot priority [R]: (1) far from the player but close
 	    enough to run back and ask, else it does not hide; (2) easy to get to and back; (3) covers the line of fire.
 	  * a MINOR trespass: the guard walks up and asks what you were doing. King Street style (alert +1 first) vs Bathurst Street style
 	    (only asks) belongs to the GUARD (a tag, `params.MinorRaiseTags`), not to the mission [R]. A bluff that works silences it for a while.
@@ -420,7 +419,7 @@ end
 
 -- A major trespass is answered with a radio call. Only an ARMED player makes the guard flee (to a hiding spot), and the call is made
 -- WHILE it runs: BotRadioStarted is emitted at once and the call lands RadioSeconds later wherever the guard is [R]. An unarmed player
--- does not make it run: it radios where it stands [P]. Killing or subduing it before the call lands cancels the call [R].
+-- does not make it run: it still radios for lockdown, where it stands [R]. Killing or subduing it before the call lands cancels the call [R].
 function Sim:_startFlee(bot, pl, why, rule)
 	local r = self.Reaction[bot.Id]
 	if r and r.Kind == "Flee" then
