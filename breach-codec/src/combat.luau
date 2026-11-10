@@ -24,6 +24,14 @@
 	that for LoseTrackSeconds after it last saw a drawn weapon or heard something [P], then loses track.
 	Hearing range = MissionSetup.SoundTravelDistance x NoiseScale[kind] [P: the scales]. In Searching a noise is only reported (Aware = false).
 	`concealed` weapons are not detected yet (M9a.1) [P].
+
+	M9c, what guards DO once the lockdown has landed (alert level 3), still opt-in and never touching a guard the alert is busy with
+	(fleeing, radioing, questioning, escorting):
+	  * Holding        every guard goes to the nearest of its own route nodes and holds there (the engine has no separate Meadow nodes yet) [R: plan]
+	  * Investigating  (Searching) a guard that hears a noise goes to the spot, waits InvestigateSeconds, then goes back to hold [P: the time]
+	  * Hunting        (Attacking) a guard that knows where the player is goes there, and again when that moves more than HuntRetargetDistance;
+	                   when it loses track it goes back to its post [R: plan: "hold, then hunt only after noise or sight"]
+	Event: GuardMoves {Bot, Mode, X, Y, Z}.  Shooting is M9d: a hunting guard does not shoot yet.
 ]==]
 
 local Combat = {}
@@ -34,6 +42,8 @@ Combat.Defaults = {
 	SoundTravelDistance = 80, -- studs, used when the mission setup has none [P]
 	NoticeMeter = 1, -- the sight meter at which a drawn weapon counts as seen
 	NoiseScale = { shot = 1.0, door = 0.3, footstep = 0.2 }, -- [P]
+	HuntRetargetDistance = 4, -- studs the known position must move before a hunting guard is sent again [P]
+	InvestigateSeconds = 6, -- how long a guard looks around a noise before going back to its post [P]
 }
 
 local Sim = {}
@@ -77,6 +87,7 @@ function Combat.new(deps, opts)
 	return setmetatable({
 		Bots = deps.bots, Sight = deps.sight, Alert = deps.alert, PlayersFn = deps.players, Setup = setup,
 		Params = params, Phase = enabled and "Calm" or "Off", Knows = {}, Seen = {}, Events = {}, Time = 0,
+		Mode = {}, Goal = {}, Wait = {}, Investigate = {},
 	}, Sim)
 end
 
@@ -168,6 +179,83 @@ function Sim:step(dt)
 			end
 		end
 	end
+	self:_move(bots, dt)
+end
+
+local function dist3(ax, ay, az, bx, by, bz)
+	return math.sqrt((ax - bx) ^ 2 + (ay - by) ^ 2 + (az - bz) ^ 2)
+end
+
+-- the nearest of the guard's own route nodes (ties: the first)
+function Sim:_nearestNode(bot)
+	local bx, by, bz = self.Bots:position(bot.Id)
+	local best, bestD
+	for _, node in ipairs(bot.Route or {}) do
+		local d = bx and dist3(bx, by, bz, node.X, node.Y, node.Z) or 0
+		if not best or d < bestD then
+			best, bestD = node, d
+		end
+	end
+	return best
+end
+
+function Sim:_send(bot, mode, state, x, y, z)
+	self.Mode[bot.Id] = mode
+	self.Goal[bot.Id] = { X = x, Y = y, Z = z }
+	self.Bots:command(bot.Id, state, x, y, z)
+	emit(self, "GuardMoves", { Bot = bot.Id, Mode = mode, X = x, Y = y, Z = z })
+end
+
+-- M9c: what each guard does once the lockdown has landed
+function Sim:_move(bots, dt)
+	if self.Phase ~= "Searching" and self.Phase ~= "Attacking" then
+		return
+	end
+	local p = self.Params
+	local lockdown = self.Alert:level() >= 3
+	for _, bot in ipairs(bots) do
+		local id = bot.Id
+		if out(bot) or bot.Flags.Hostage then
+			self.Mode[id], self.Goal[id], self.Wait[id], self.Investigate[id] = nil, nil, nil, nil
+		elseif self.Alert:busy(id) then
+			self.Mode[id] = nil -- the alert has the guard: not ours to move
+		elseif not lockdown then
+			if self.Mode[id] then
+				self.Mode[id] = nil
+				self.Bots:resume(id)
+			end
+		else
+			local k = self.Knows[id]
+			local inv = self.Investigate[id]
+			if k then
+				local g = self.Goal[id]
+				if self.Mode[id] ~= "Hunting" or not g or dist3(g.X, g.Y, g.Z, k.X, k.Y, k.Z) > p.HuntRetargetDistance then
+					self.Investigate[id], self.Wait[id] = nil, nil
+					self:_send(bot, "Hunting", "Hunting", k.X, k.Y, k.Z)
+				end
+			elseif inv then
+				self.Investigate[id], self.Wait[id] = nil, nil
+				self:_send(bot, "Investigating", "Investigating", inv.X, inv.Y, inv.Z)
+			else
+				local mode = self.Mode[id]
+				if mode == "Investigating" and bot.State == "Investigating" then -- arrived: look around, then go back
+					self.Wait[id] = (self.Wait[id] or p.InvestigateSeconds) - dt
+					if self.Wait[id] <= 0 then
+						self.Wait[id], mode = nil, nil
+					end
+				end
+				if mode ~= "Investigating" and mode ~= "Holding" then -- nothing to do: back to the nearest post
+					local node = self:_nearestNode(bot)
+					if node then
+						self:_send(bot, "Holding", "Holding", node.X, node.Y, node.Z)
+					else
+						self.Mode[id] = "Holding"
+						self.Bots:hold(id, "Holding")
+					end
+				end
+			end
+		end
+	end
 end
 
 function Sim:hearingRange(kind)
@@ -196,6 +284,8 @@ function Sim:noise(kind, x, y, z, playerId)
 					emit(self, "NoiseHeard", { Bot = bot.Id, Noise = kind, X = x, Y = y, Z = z, Aware = aware })
 					if aware then
 						self:_know(bot, { Id = playerId or "?", X = x, Y = y, Z = z }, "Noise:" .. kind)
+					else
+						self.Investigate[bot.Id] = { X = x, Y = y, Z = z } -- Searching: go and look (M9c)
 					end
 				end
 			end

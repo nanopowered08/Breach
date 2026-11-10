@@ -460,6 +460,11 @@ function Sim:_raisesOnMinor(bot)
 end
 
 -- A bot radios right where it stands (no hiding spot): the call lands as lockdown after RadioSeconds. Used by BreachHostage
+-- Is the guard in the middle of one of the alert's reactions (flee/radio, question, escort, ...)? BreachCombat leaves such a guard alone.
+function Sim:busy(botId)
+	return self.Reaction[botId] ~= nil
+end
+
 -- A guard sees an ARMED player (BreachCombat, M9a): it flees and radios at the same time, exactly as for a major trespass by an armed player [R].
 function Sim:fleeAndRadio(botId, playerId, why)
 	local bot = self.Bots:bot(botId)
