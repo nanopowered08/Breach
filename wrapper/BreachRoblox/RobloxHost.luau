@@ -274,6 +274,36 @@ function Host:renderProps(placements, library)
 	return placed
 end
 
+-- Draws the scalable props (Core.ScalableProps: windows, garage doors, ladders, pipes, vents, planters, bushes) as one anchored Part each, the size of
+-- its placeholder. `styles` is Core.ScalableProps. Needs no prop library. Yields every 100 parts. Returns how many parts were made.
+function Host:renderScalables(list, styles)
+	local group = Instance.new("Folder")
+	group.Name = "ScalableProps"
+	group.Parent = self.MapFolder
+	local made = 0
+	for i, p in ipairs(list) do
+		local style = styles[p.Name]
+		if style then
+			local part = Instance.new("Part")
+			part.Name = p.Name
+			part.Anchored = true
+			part.Size = Vector3.new(math.max(p.SizeX, 0.05), math.max(p.SizeY, 0.05), math.max(p.SizeZ, 0.05))
+			part.CFrame = CFrame.new(p.X, p.Y, p.Z) * CFrame.fromEulerAnglesXYZ(p.Rx, p.Ry, p.Rz)
+			part.Color = Color3.new(style.Color[1], style.Color[2], style.Color[3])
+			local okM, mat = pcall(function() return Enum.Material[style.Material] end)
+			if okM and mat then part.Material = mat end
+			part.Transparency = style.Transparency or 0
+			part.CanCollide = style.Collide ~= false
+			part.TopSurface = Enum.SurfaceType.Smooth
+			part.BottomSurface = Enum.SurfaceType.Smooth
+			part.Parent = group
+			made += 1
+		end
+		if i % 100 == 0 then task.wait() end
+	end
+	return made
+end
+
 -- Applies a mission's `LightingSettings` (MissionSetup) from the prop library's lighting presets: a Folder per preset whose attributes are
 -- Lighting properties (Brightness, OutdoorAmbient, EnvironmentDiffuseScale) and whose children are the effects (Sky, Atmosphere, Blur, SunRays,
 -- ColorCorrection, Clouds). `setting` is the preset name, or a table that holds it (`Preset` / `Name` / first entry). `presets` is
