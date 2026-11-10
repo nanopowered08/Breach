@@ -36,7 +36,9 @@ return function(check)
 		for i, d in ipairs(botDefs) do
 			local rname = "Post" .. i
 			list[#list + 1] = botNode("bot" .. i, { Behavior = "PatrolWalk", Nodes = rname, PatrolCycleLength = 99999, Class = "Sec" })
-			routes[#routes + 1] = folder(rname, { part("Node1", d.X, 0, d.Z or 0, {}, FACE_PLUS_X) })
+			local nodeParts = {}
+			for j, n in ipairs(d.Route or { { X = d.X, Z = d.Z } }) do nodeParts[#nodeParts + 1] = part("Node" .. j, n.X, 0, n.Z or 0, {}, FACE_PLUS_X) end
+			routes[#routes + 1] = folder(rname, nodeParts)
 		end
 		local botsF, nodesF = folder("Bots", list), folder("Nodes", routes)
 		local m = { folder = function(_, n) if n == "Bots" then return botsF elseif n == "Nodes" then return nodesF end end, byComponent = function() return {} end }
@@ -192,6 +194,89 @@ return function(check)
 		pr:setWeapon("p1", "drawn")
 		run(2)
 		check("combat: drawing the weapon again is seen again", #kinds(combat:drainEvents(), "WeaponSeen") == 2)
+	end
+
+	-------------------------------------------------------------------------------- M9c: what guards do once the lockdown has landed
+	local function moves(evs, mode) local out = {} for _, e in ipairs(evs) do if e.Kind == "GuardMoves" and (mode == nil or e.Mode == mode) then out[#out + 1] = e end end return out end
+
+	do -- Searching: every guard holds at its post
+		local combat, al, bots, pr, run = live({ { X = -20 } })
+		run(1)
+		check("move: before the lockdown a guard is not touched", #moves(combat:drainEvents()) == 0 and bots:all()[1].Command == nil)
+		al:lockdown("test")
+		run(2)
+		local m = moves(combat:drainEvents(), "Holding")
+		check("move: at lockdown the guard is sent to hold at its nearest post", #m == 1 and math.abs(m[1].X - -20) < 1e-6)
+		check("move: ... and holds there", bots:all()[1].State == "Holding")
+		run(5)
+		check("move: it is not sent again and again", #moves(combat:drainEvents()) == 0)
+	end
+
+	do -- Searching: a noise is investigated, then the guard goes back to the NEAREST post
+		local combat, al, bots, pr, run = live({ { Route = { { X = -60 }, { X = -20 } } } })
+		al:lockdown("test")
+		run(3)
+		combat:drainEvents()
+		check("move: it starts at the first route node and holds at the nearest one (itself)", math.abs(bots:position(botId(bots, 1)) - -60) < 2)
+		check("move: a noise 25 studs away is heard in Searching", combat:noise("shot", -35, 0, 0, "p1") == 1)
+		run(0.2)
+		local inv = moves(combat:drainEvents(), "Investigating")
+		check("move: the guard goes to look at the noise", #inv == 1 and inv[1].X == -35)
+		run(6)
+		check("move: it gets there and looks around", math.abs(bots:position(botId(bots, 1)) - -35) < 3 and bots:all()[1].State == "Investigating", bots:all()[1].State)
+		run(8)
+		local back = moves(combat:drainEvents(), "Holding")
+		check("move: after InvestigateSeconds it goes back to hold at the nearest post (-20, not -60)", #back == 1 and back[1].X == -20, back[1] and back[1].X)
+		run(6)
+		check("move: ... and is there", math.abs(bots:position(botId(bots, 1)) - -20) < 3 and bots:all()[1].State == "Holding")
+		check("move: Searching never tells a guard where the player is", combat:knows(botId(bots, 1)) == nil)
+	end
+
+	do -- Attacking: not before the lockdown lands; then hunt; retarget; lose track; back to the post
+		local combat, al, bots, pr, run = live({ { Route = { { X = -60 }, { X = -20 } } } })
+		pr:setWeapon("p1", "drawn")
+		run(2.5)
+		check("move: a weapon seen below lockdown: the guard flees and radios, Combat does not move it", #moves(combat:drainEvents()) == 0 and al:level() == 0)
+		run(6)
+		check("move: the lockdown landed", al:level() == 3)
+		local hunt = moves(combat:drainEvents(), "Hunting")
+		check("move: then the guard hunts the position it knows (the player at -10)", #hunt >= 1 and math.abs(hunt[1].X - -10) < 1e-6, #hunt)
+		run(12)
+		check("move: it reaches the player", math.abs(bots:position(botId(bots, 1)) - -10) < 4 and bots:all()[1].State == "Hunting", bots:all()[1].State .. " x=" .. tostring(bots:position(botId(bots, 1))))
+		combat:drainEvents()
+		pr:move("p1", -2, 0, 0)
+		run(2)
+		local again = moves(combat:drainEvents(), "Hunting")
+		check("move: the player moved 8 studs: the guard is sent again, to the new spot", #again == 1 and math.abs(again[1].X - -2) < 1e-6, #again)
+		pr:move("p1", -2, 0, 3)
+		run(2)
+		check("move: a 3 stud move is not worth a new order", #moves(combat:drainEvents(), "Hunting") == 0)
+		pr:move("p1", -400, 0, 0) -- out of sight and out of the way
+		run(25)
+		local lost = kinds(combat:drainEvents(), "GuardLostTrack")
+		check("move: it loses track", #lost == 1 and combat:knows(botId(bots, 1)) == nil)
+		run(8)
+		check("move: ... and goes back to hold at its nearest post", bots:all()[1].State == "Holding" and math.abs(bots:position(botId(bots, 1)) - -20) < 5, bots:all()[1].State .. " x=" .. tostring(bots:position(botId(bots, 1))))
+	end
+
+	do -- a guard the alert is busy with, or one that is down, is not moved
+		local combat, al, bots, pr, run = live({ { X = -20 }, { X = -40 } })
+		al:lockdown("test")
+		bots:setFlag(botId(bots, 2), "Dead", true)
+		run(2)
+		local m = moves(combat:drainEvents())
+		check("move: a dead guard is not sent anywhere", #m == 1 and m[1].Bot == botId(bots, 1))
+		pr:setWeapon("p1", "drawn")
+		check("move: a guard in a reaction (here: fleeing and radioing) is left to the alert", al:fleeAndRadio(botId(bots, 1), "p1", "x") == true and al:busy(botId(bots, 1)) == true)
+		run(0.2)
+		check("move: ... so it is not given a Holding order meanwhile", #moves(combat:drainEvents()) == 0)
+	end
+
+	do -- off: nothing moves
+		local combat, al, bots, pr, run = live({ { X = -20 } }, { enabled = false })
+		al:lockdown("test")
+		run(3)
+		check("move: not opted in: lockdown moves nobody", #moves(combat:drainEvents()) == 0 and bots:all()[1].Command == nil)
 	end
 
 	do -- determinism
