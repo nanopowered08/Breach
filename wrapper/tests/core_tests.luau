@@ -261,6 +261,14 @@ return function(check)
 		check("players: Weapon reaches Props:setWeapon and wins over Armed", string.find(text, "weapon:p1:concealed", 1, true) ~= nil and string.find(text, "armed:p1", 1, true) == nil, text)
 		check("players: without a Weapon, Armed still reaches Props:setArmed", string.find(text, "armed:p2:false", 1, true) ~= nil, text)
 		check("players: the stance still reaches Props:setStance", string.find(text, "stance:p1:crouch", 1, true) ~= nil)
+
+		-- the real health reaches the combat module (as a fraction of PlayerMaxHealth), when there is one
+		local healed = {}
+		session.Combat = { Params = { PlayerMaxHealth = 100 }, setPlayerHealth = function(_, id, hp) healed[#healed + 1] = id .. "=" .. tostring(hp) end }
+		a:syncPlayers({ { Id = "p1", X = 0, Y = 0, Z = 0, HealthFraction = 0.25 }, { Id = "p2", X = 0, Y = 0, Z = 0 } })
+		check("players: HealthFraction reaches Combat:setPlayerHealth scaled to PlayerMaxHealth, and only when given", #healed == 1 and healed[1] == "p1=25", table.concat(healed, ","))
+		session.Combat = nil
+		check("players: no combat module: HealthFraction is simply ignored", pcall(function() a:syncPlayers({ { Id = "p1", X = 0, Y = 0, Z = 0, HealthFraction = 0.5 } }) end))
 	end
 
 	-------------------------------------------------------------------------------- a real session (only when local mission data is present)

@@ -42,6 +42,7 @@ local M = {
 	Shuffle = require("../../breach-codec/BreachShuffle"),
 	Trespass = require("../../breach-codec/BreachTrespass"),
 	Alert = require("../../breach-codec/BreachAlert"),
+	CombatData = require("../../breach-codec/BreachCombatData"),
 	Combat = require("../../breach-codec/BreachCombat"),
 	Hostage = require("../../breach-codec/BreachHostage"),
 	Behavior = require("../../breach-codec/BreachBehavior"),

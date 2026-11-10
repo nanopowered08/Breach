@@ -40,7 +40,8 @@ function Session.new(M, mission, world, setup, opts)
 	tr:attach(sight, bots, players)
 	local alert = M.Alert.new(logic, { mission = mission, bots = bots, sight = sight, trespass = tr, players = players, world = world, params = opts.alertParams, hidingSpots = opts.hidingSpots })
 	sight.LevelFn = function() return alert:level() end -- the higher the alert level, the faster guards notice (Calm 0.9x, Normal 1x, Alert 1.1x)
-	local combat = M.Combat and M.Combat.new({ bots = bots, sight = sight, alert = alert, players = players, setup = setup }, { enabled = opts.twoPhase == true, params = opts.combatParams })
+	local combat = M.Combat and M.Combat.new({ bots = bots, sight = sight, alert = alert, players = players, setup = setup,
+		classInfo = M.CombatData and function(bot) return M.CombatData.classInfo(bot.Class) end or nil }, { enabled = opts.twoPhase == true, params = opts.combatParams, seed = seed })
 	local hostage = M.Hostage.new(logic, { mission = mission, bots = bots, nav = nav, players = players, props = props, sight = sight, world = world, alert = alert, params = opts.hostageParams, altTriggers = opts.altTriggers })
 	local behavior = M.Behavior.new(logic, { mission = mission, bots = bots, nav = nav, alert = alert, players = players, params = opts.behaviorParams })
 	return setmetatable({

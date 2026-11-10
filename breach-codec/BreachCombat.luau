@@ -31,8 +31,114 @@
 	  * Investigating  (Searching) a guard that hears a noise goes to the spot, waits InvestigateSeconds, then goes back to hold [P: the time]
 	  * Hunting        (Attacking) a guard that knows where the player is goes there, and again when that moves more than HuntRetargetDistance;
 	                   when it loses track it goes back to its post [R: plan: "hold, then hunt only after noise or sight"]
-	Event: GuardMoves {Bot, Mode, X, Y, Z}.  Shooting is M9d: a hunting guard does not shoot yet.
+	Event: GuardMoves {Bot, Mode, X, Y, Z}.
+
+	M9d, shooting, health and deaths (Attacking phase, lockdown landed, only guards the alert is not busy with):
+	  * A guard that SEES a player (and the player is not down) fires its weapon, one round at a time, RoundsPerSecond, hitscan. Every guard
+	    carries the S97 [R: owner]: 30 rounds, 0.5 HP per round, so a whole magazine on a player is 15 HP; rate of fire and reload time are [P].
+	  * Hit chance per round = clamp(HitChanceBase + HitChancePerSecond x seconds the player has been in its sight, base, max) [P: plan], so
+	    shooting starts inaccurate and sharpens. The rolls come from a seeded stream: same seed, same shots.
+	  * Players have PlayerMaxHealth (100) [P]; at 0 they are down (PlayerDown), and are not shot at again. The host reports healing with
+	    setPlayerHealth. Guards have the health of their class (BreachCombatData class table, 120 for a placed guard [O]) and die at 0.
+	  * Damage TO a guard comes from the host (the player's own weapon): combat:damageBot(botId, amount, playerId) -> BotHit / BotDied.
+	  * Health bar rule: a guard shows one iff its class says so (MaxHealth above 200, or ForceHealthDisplay) [O].
+	Events: GuardFired {Bot, Player, Hit, Weapon}  GuardReloading {Bot}  PlayerHit {Bot, Player, Damage, Health}  PlayerDown {Player, By}
+	        BotHit {Bot, Damage, Health, By}  BotDied {Bot, By}
 ]==]
+
+local Random = (function()
+--[[
+	BreachRandom — the one place BreachEngine makes seeded decisions (main doc §7.5).
+
+	Pure Luau, no requires. Only 32-bit integer arithmetic, so the same seed gives the same numbers on every host
+	(desktop Luau, Roblox, an embedded C++ runtime). It does NOT reproduce Entry Point's own random numbers —
+	nobody outside the game knows that algorithm — it only guarantees that a (mission seed, caller seed) pair
+	always yields the same answer.
+
+	    Random.derive(missionSeed, callerSeed, min, max)   -- stateless: integer in [min, max], used by the `RNG` expression
+	    local r = Random.new(seed)                          -- stream, for shuffles etc. (later milestones)
+	    r:nextFloat()  r:nextInt(min, max)
+]]
+
+local Random = {}
+
+local TWO32 = 4294967296
+
+-- 32-bit multiply without losing precision (doubles hold 2^53 exactly; a*b would not).
+local function mul32(a, b)
+	local ah = a // 65536
+	local al = a % 65536
+	return (((ah * b) % 65536) * 65536 + al * b) % TWO32
+end
+
+-- murmur3 finaliser: every input bit affects every output bit.
+local function mix(h)
+	h = bit32.bxor(h, bit32.rshift(h, 16))
+	h = mul32(h, 0x85EBCA6B)
+	h = bit32.bxor(h, bit32.rshift(h, 13))
+	h = mul32(h, 0xC2B2AE35)
+	h = bit32.bxor(h, bit32.rshift(h, 16))
+	return h
+end
+
+-- Any seed -> uint32. Numbers: floor, wrap (negatives fine). Strings: FNV-1a. Anything else: 0.
+local function toSeed(x)
+	if type(x) == "number" then
+		if x ~= x or x == math.huge or x == -math.huge then
+			return 0
+		end
+		return math.floor(x) % TWO32
+	elseif type(x) == "string" then
+		local h = 2166136261
+		for i = 1, #x do
+			h = mul32(bit32.bxor(h, string.byte(x, i)), 16777619)
+		end
+		return h
+	end
+	return 0
+end
+Random.toSeed = toSeed
+
+-- Uniform float in [0, 1) from a uint32.
+local function unit(h)
+	return h / TWO32
+end
+
+local function intIn(u, min, max)
+	min, max = math.floor(min), math.floor(max)
+	if max < min then
+		min, max = max, min
+	end
+	return min + math.floor(u * (max - min + 1))
+end
+
+function Random.derive(missionSeed, callerSeed, min, max)
+	local h = mix((mul32(mix(toSeed(missionSeed)), 0x01000193) + mix((toSeed(callerSeed) + 0x9E3779B9) % TWO32)) % TWO32)
+	return intIn(unit(h), min, max)
+end
+
+local Stream = {}
+Stream.__index = Stream
+
+function Random.new(seed)
+	return setmetatable({ State = toSeed(seed) }, Stream)
+end
+
+function Stream:nextU32()
+	self.State = (self.State + 0x9E3779B9) % TWO32
+	return mix(self.State)
+end
+
+function Stream:nextFloat()
+	return unit(self:nextU32())
+end
+
+function Stream:nextInt(min, max)
+	return intIn(self:nextFloat(), min, max)
+end
+
+return Random
+end)()
 
 local Combat = {}
 Combat.VERSION = "0.1.0"
@@ -42,6 +148,10 @@ Combat.Defaults = {
 	SoundTravelDistance = 80, -- studs, used when the mission setup has none [P]
 	NoticeMeter = 1, -- the sight meter at which a drawn weapon counts as seen
 	NoiseScale = { shot = 1.0, door = 0.3, footstep = 0.2 }, -- [P]
+	Weapons = { S97 = { Damage = 0.5, MagSize = 30, RoundsPerSecond = 10, ReloadSeconds = 2.5 } }, -- Damage, MagSize [R: owner]; the rest [P]
+	GuardWeapon = "S97", -- what every guard carries for now [R: owner: "use an S97"]
+	HitChanceBase = 0.15, HitChancePerSecond = 0.1, HitChanceMax = 0.6, -- [P: plan]
+	PlayerMaxHealth = 100, -- [P] (to confirm with the owner)
 	HuntRetargetDistance = 4, -- studs the known position must move before a hunting guard is sent again [P]
 	InvestigateSeconds = 6, -- how long a guard looks around a noise before going back to its post [P]
 }
@@ -73,10 +183,26 @@ function Combat.new(deps, opts)
 	for k, v in pairs(Combat.Defaults.NoiseScale) do
 		params.NoiseScale[k] = v
 	end
+	params.Weapons = {}
+	for name, w in pairs(Combat.Defaults.Weapons) do
+		local copy = {}
+		for k, v in pairs(w) do
+			copy[k] = v
+		end
+		params.Weapons[name] = copy
+	end
 	for k, v in pairs(opts.params or {}) do
 		if k == "NoiseScale" and type(v) == "table" then
 			for kind, scale in pairs(v) do
 				params.NoiseScale[kind] = scale
+			end
+		elseif k == "Weapons" and type(v) == "table" then
+			for name, fields in pairs(v) do -- merged field by field: { S97 = { ReloadSeconds = 5 } } keeps the rest of the S97
+				local w = params.Weapons[name] or {}
+				for f, x in pairs(fields) do
+					w[f] = x
+				end
+				params.Weapons[name] = w
 			end
 		else
 			params[k] = v
@@ -88,6 +214,9 @@ function Combat.new(deps, opts)
 		Bots = deps.bots, Sight = deps.sight, Alert = deps.alert, PlayersFn = deps.players, Setup = setup,
 		Params = params, Phase = enabled and "Calm" or "Off", Knows = {}, Seen = {}, Events = {}, Time = 0,
 		Mode = {}, Goal = {}, Wait = {}, Investigate = {},
+		Health = {}, Down = {}, BotHealth = {}, Ammo = {}, Reload = {}, Fire = {}, Exposure = {},
+		Stream = Random.new(opts.seed or 0),
+		ClassInfo = deps.classInfo or function() return { Health = 120, DamageOutput = 1, ShowsHealthBar = false } end,
 	}, Sim)
 end
 
@@ -180,6 +309,7 @@ function Sim:step(dt)
 		end
 	end
 	self:_move(bots, dt)
+	self:_shoot(bots, dt)
 end
 
 local function dist3(ax, ay, az, bx, by, bz)
@@ -253,6 +383,135 @@ function Sim:_move(bots, dt)
 						self.Bots:hold(id, "Holding")
 					end
 				end
+			end
+		end
+	end
+end
+
+---------------------------------------------------------------------------------------------------------- M9d: shooting, health, deaths
+local function clamp(v, lo, hi)
+	return math.max(lo, math.min(hi, v))
+end
+
+function Sim:playerHealth(id)
+	local max = self.Params.PlayerMaxHealth
+	local hp = self.Health[id]
+	if hp == nil then
+		hp = max
+	end
+	return hp, max, self.Down[id] == true
+end
+
+-- the host reports healing (or a respawn): back above 0 the player can be shot at again
+function Sim:setPlayerHealth(id, hp)
+	self.Health[id] = clamp(hp, 0, self.Params.PlayerMaxHealth)
+	self.Down[id] = self.Health[id] <= 0 or nil
+end
+
+function Sim:_damagePlayer(bot, pl, amount)
+	local hp = self:playerHealth(pl.Id)
+	hp = math.max(0, hp - amount)
+	self.Health[pl.Id] = hp
+	emit(self, "PlayerHit", { Bot = bot.Id, Player = pl.Id, Damage = amount, Health = hp })
+	if hp <= 0 then
+		self.Down[pl.Id] = true
+		emit(self, "PlayerDown", { Player = pl.Id, By = bot.Id })
+	end
+end
+
+function Sim:_botInfo(bot)
+	local info = self.ClassInfo(bot)
+	return { Health = info.Health or 120, DamageOutput = info.DamageOutput or 1, ShowsHealthBar = info.ShowsHealthBar == true }
+end
+
+function Sim:botHealth(botId)
+	local bot = self.Bots:bot(botId)
+	if not bot then
+		return nil
+	end
+	local info = self:_botInfo(bot)
+	local hp = self.BotHealth[botId]
+	if hp == nil then
+		hp = info.Health
+	end
+	return hp, info.Health, info.ShowsHealthBar
+end
+
+-- The host reports damage dealt TO a guard (the player's own weapon). Returns the guard's health after it, or nil for an unknown or dead guard.
+function Sim:damageBot(botId, amount, playerId)
+	local bot = self.Bots:bot(botId)
+	if out(bot) or self.Phase == "Off" then
+		return nil
+	end
+	local hp = self:botHealth(botId)
+	hp = math.max(0, hp - amount)
+	self.BotHealth[botId] = hp
+	emit(self, "BotHit", { Bot = botId, Damage = amount, Health = hp, By = playerId })
+	if hp <= 0 then
+		self.Bots:setFlag(botId, "Dead", true)
+		emit(self, "BotDied", { Bot = botId, By = playerId })
+	end
+	return hp
+end
+
+function Sim:_shoot(bots, dt)
+	if self.Phase ~= "Attacking" or self.Alert:level() < 3 then
+		self.Exposure = {}
+		return
+	end
+	local p = self.Params
+	local w = p.Weapons[p.GuardWeapon]
+	if not w then
+		return
+	end
+	local interval = 1 / w.RoundsPerSecond
+	local players = self.PlayersFn()
+	for _, bot in ipairs(bots) do
+		local id = bot.Id
+		if out(bot) or bot.Flags.Hostage or self.Alert:busy(id) then
+			self.Fire[id] = nil
+		else
+			local target
+			for _, pl in ipairs(players) do
+				local key = id .. "|" .. pl.Id
+				if not self.Down[pl.Id] and self.Sight:canSee(id, pl.Id) then
+					self.Exposure[key] = (self.Exposure[key] or 0) + dt
+					target = target or pl
+				else
+					self.Exposure[key] = nil
+				end
+			end
+			if self.Reload[id] then
+				self.Reload[id] -= dt
+				if self.Reload[id] <= 0 then
+					self.Reload[id], self.Ammo[id] = nil, w.MagSize
+				end
+			elseif target then
+				self.Fire[id] = (self.Fire[id] or 0) + dt
+				local damage = w.Damage * self:_botInfo(bot).DamageOutput
+				while self.Fire[id] >= interval and not self.Down[target.Id] do
+					local ammo = self.Ammo[id]
+					if ammo == nil then
+						ammo = w.MagSize
+					end
+					if ammo <= 0 then
+						break
+					end
+					self.Fire[id] -= interval
+					self.Ammo[id] = ammo - 1
+					local chance = clamp(p.HitChanceBase + p.HitChancePerSecond * (self.Exposure[id .. "|" .. target.Id] or 0), p.HitChanceBase, p.HitChanceMax)
+					local hit = self.Stream:nextFloat() < chance
+					emit(self, "GuardFired", { Bot = id, Player = target.Id, Hit = hit, Weapon = p.GuardWeapon })
+					if hit then
+						self:_damagePlayer(bot, target, damage)
+					end
+				end
+				if (self.Ammo[id] or w.MagSize) <= 0 then
+					self.Reload[id], self.Fire[id] = w.ReloadSeconds, 0
+					emit(self, "GuardReloading", { Bot = id })
+				end
+			else
+				self.Fire[id] = 0
 			end
 		end
 	end

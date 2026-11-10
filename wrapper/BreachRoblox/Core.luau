@@ -7,7 +7,7 @@
 
 	    local session, info = Core.loadMission(M, missionCode, { seed = 416 })     -- M = the engine modules (see Init.luau); nil, "decode: ..." on failure
 	    local adapter = Core.new(session, host, { maxDt = 0.1 })
-	    adapter:syncPlayers(host:getPlayers())      -- every frame: { {Id, X, Y, Z, Stance, Armed, Weapon}, ... }; joins, moves, leaves are worked out
+	    adapter:syncPlayers(host:getPlayers())      -- every frame: { {Id, X, Y, Z, Stance, Armed, Weapon, HealthFraction}, ... }; joins, moves, leaves are worked out
 	    adapter:step(dt)                            -- every frame: steps the session, then shows the result through the host
 
 	The host may implement any of these methods (all optional; they are called as host:name(...)):
@@ -175,6 +175,7 @@ function Adapter:syncPlayers(list)
 		end
 		if p.Stance then S.Props:setStance(p.Id, p.Stance) end
 		if p.Weapon then S.Props:setWeapon(p.Id, p.Weapon) elseif p.Armed ~= nil then S.Props:setArmed(p.Id, p.Armed) end
+		if p.HealthFraction ~= nil and S.Combat then S.Combat:setPlayerHealth(p.Id, p.HealthFraction * S.Combat.Params.PlayerMaxHealth) end
 		if p.Disguise ~= nil then S:setDisguise(p.Id, p.Disguise) end
 	end
 	for id in pairs(self.PlayerIds) do
