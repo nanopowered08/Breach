@@ -261,6 +261,20 @@ return function(check)
 		check("players: Weapon reaches Props:setWeapon and wins over Armed", string.find(text, "weapon:p1:concealed", 1, true) ~= nil and string.find(text, "armed:p1", 1, true) == nil, text)
 		check("players: without a Weapon, Armed still reaches Props:setArmed", string.find(text, "armed:p2:false", 1, true) ~= nil, text)
 		check("players: the stance still reaches Props:setStance", string.find(text, "stance:p1:crouch", 1, true) ~= nil)
+
+		-- the real health reaches the combat module (as a fraction of PlayerMaxHealth), when there is one
+		local healed = {}
+		session.Combat = { Params = { PlayerMaxHealth = 100 }, setPlayerHealth = function(_, id, hp) healed[#healed + 1] = id .. "=" .. tostring(hp) end }
+		a:syncPlayers({ { Id = "p1", X = 0, Y = 0, Z = 0, HealthFraction = 0.25 }, { Id = "p2", X = 0, Y = 0, Z = 0 } })
+		check("players: HealthFraction reaches Combat:setPlayerHealth scaled to PlayerMaxHealth, and only when given", #healed == 1 and healed[1] == "p1=25", table.concat(healed, ","))
+		local hits = {}
+		session.Combat = { Params = { PlayerMaxHealth = 100 }, weaponDamage = function(_, w) return w == "S97" and 40 or nil end,
+			damageBot = function(_, bot, amount, by) hits[#hits + 1] = bot .. ":" .. amount .. ":" .. by return 80 end }
+		check("hitBot: the S97's damage goes to the guard, by the player", a:hitBot("b1", 123, nil) == 80 and hits[1] == "b1:40:123", hits[1])
+		check("hitBot: an unknown weapon does nothing", a:hitBot("b1", 123, "Spoon") == nil and #hits == 1)
+		session.Combat = nil
+		check("hitBot: without the combat module it does nothing", a:hitBot("b1", 123) == nil)
+		check("players: no combat module: HealthFraction is simply ignored", pcall(function() a:syncPlayers({ { Id = "p1", X = 0, Y = 0, Z = 0, HealthFraction = 0.5 } }) end))
 	end
 
 	-------------------------------------------------------------------------------- a real session (only when local mission data is present)

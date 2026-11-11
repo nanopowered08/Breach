@@ -78,7 +78,7 @@ Attacking never falls back to Searching on its own. A map script may still write
 | **M9a** *(done, docs 8.3.3)* | Phase machine (Searching / Attacking), awareness, noise and weapon-seen events, opt-in switch. **Left for M9a.1**: concealed-weapon detection, camera and body incidents as Searching triggers | scripted scenarios: lockdown without a weapon stays Searching, drawn weapon in sight flips to Attacking *(done)* |
 | **M9b** | Hostage pose: prone stance, trespass-cell check, guard helps up and escorts, escort event | pose works in Searching, fails in Attacking and in trespass cells |
 | **M9c** *(done, docs 8.3.3)* | Combat movement: hold at nearest node, hunt, hearing, lose track | guards hold, then hunt only after noise or sight *(done)* |
-| **M9d** | Shooting, health, deaths, health-bar rule | determinism: same seed, same signature |
+| **M9d** *(done, docs 8.3.3: S97, 15 HP per magazine)* | Shooting, health, deaths, health-bar rule | determinism: same seed, same signature |
 | **M9e** | Grenades and C4 | throw, fuse, damage falloff, plant, detonate, disarm |
 | **M9f** | Spawners, waves, boss custom spawn | a Blacksite-style wave sequence over a fake clock |
 | **M9g** | Session integration, playthroughs, docs 8.3.2, HANDOFF | suite green, signatures stable |

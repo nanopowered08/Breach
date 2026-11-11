@@ -11,6 +11,7 @@
 ]==]
 
 local Players = game:GetService("Players")
+local Debris = game:GetService("Debris")
 
 local Host = {}
 Host.__index = Host
@@ -128,7 +129,54 @@ function Host:alertChanged(level, before)
 	end
 end
 
+-- M9d: a guard's round hit the player. The engine's damage (the S97: 0.5 per round, on PlayerMaxHealth 100) is scaled to the Humanoid's MaxHealth.
+function Host:damagePlayer(playerId, amount)
+	local plr = Players:GetPlayerByUserId(tonumber(playerId) or -1)
+	local hum = plr and plr.Character and plr.Character:FindFirstChildOfClass("Humanoid")
+	if hum and hum.Health > 0 then
+		hum:TakeDamage(amount * hum.MaxHealth / (self.Options.PlayerMaxHealth or 100))
+	end
+end
+
+-- M9d: a short neon line from the guard to the player for every round fired; a miss lands a little to the side. At most 40 at a time.
+function Host:tracer(botId, playerId, hit)
+	local rig = self.Rigs[botId]
+	local plr = Players:GetPlayerByUserId(tonumber(playerId) or -1)
+	local hrp = plr and plr.Character and plr.Character:FindFirstChild("HumanoidRootPart")
+	if not (rig and rig.Model.PrimaryPart and hrp) or (self.TracerCount or 0) >= 40 then return end
+	self.TracerCount = (self.TracerCount or 0) + 1
+	self.TracerSeq = (self.TracerSeq or 0) + 1
+	local from = rig.Model.PrimaryPart.Position + Vector3.new(0, 1.5, 0)
+	local to = hrp.Position
+	if not hit then
+		local side = (self.TracerSeq % 2 == 0) and 1 or -1
+		to += Vector3.new(side * (1.5 + (self.TracerSeq % 3)), (self.TracerSeq % 2) - 0.5, side * 1.5)
+	end
+	local dist = (to - from).Magnitude
+	if dist < 0.1 then
+		self.TracerCount -= 1
+		return
+	end
+	local part = Instance.new("Part")
+	part.Name = "Tracer"
+	part.Anchored, part.CanCollide, part.CanQuery, part.CanTouch = true, false, false, false
+	part.Material = Enum.Material.Neon
+	part.Color = hit and Color3.fromRGB(255, 120, 60) or Color3.fromRGB(255, 220, 120)
+	part.Size = Vector3.new(0.08, 0.08, dist)
+	part.CFrame = CFrame.lookAt(from:Lerp(to, 0.5), to)
+	part.Parent = self.BotsFolder
+	Debris:AddItem(part, 0.07)
+	task.delay(0.08, function() self.TracerCount = math.max(0, (self.TracerCount or 1) - 1) end)
+end
+
 function Host:event(ev)
+	if ev.Source == "Combat" then
+		if ev.Kind == "PlayerHit" then
+			self:damagePlayer(ev.Player, ev.Damage)
+		elseif ev.Kind == "GuardFired" then
+			self:tracer(ev.Bot, ev.Player, ev.Hit)
+		end
+	end
 	if self.Options.LogEvents then
 		print(("[Breach] %s.%s %s"):format(tostring(ev.Source), tostring(ev.Kind), tostring(ev.Bot or ev.Spawner or ev.Level or "")))
 	end
@@ -148,7 +196,9 @@ function Host:getPlayers()
 			-- weapon state (M9a): the attribute "BreachWeapon" = "holstered" | "drawn" | "concealed"; without it, armed means "drawn"
 			local weapon = char:GetAttribute("BreachWeapon")
 			if weapon ~= "holstered" and weapon ~= "drawn" and weapon ~= "concealed" then weapon = armed and "drawn" or "holstered" end
-			out[#out + 1] = { Id = tostring(plr.UserId), X = p.X, Y = p.Y + self.PlayerYOffset, Z = p.Z, Stance = char:GetAttribute("BreachStance") or "stand", Armed = weapon == "drawn", Weapon = weapon }
+			local hum = char:FindFirstChildOfClass("Humanoid")
+			local fraction = hum and hum.MaxHealth > 0 and math.clamp(hum.Health / hum.MaxHealth, 0, 1) or nil -- the engine mirrors the real health (healing, respawns)
+			out[#out + 1] = { Id = tostring(plr.UserId), HealthFraction = fraction, X = p.X, Y = p.Y + self.PlayerYOffset, Z = p.Z, Stance = char:GetAttribute("BreachStance") or "stand", Armed = weapon == "drawn", Weapon = weapon }
 		end
 	end
 	return out

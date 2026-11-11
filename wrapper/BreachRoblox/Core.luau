@@ -7,7 +7,7 @@
 
 	    local session, info = Core.loadMission(M, missionCode, { seed = 416 })     -- M = the engine modules (see Init.luau); nil, "decode: ..." on failure
 	    local adapter = Core.new(session, host, { maxDt = 0.1 })
-	    adapter:syncPlayers(host:getPlayers())      -- every frame: { {Id, X, Y, Z, Stance, Armed, Weapon}, ... }; joins, moves, leaves are worked out
+	    adapter:syncPlayers(host:getPlayers())      -- every frame: { {Id, X, Y, Z, Stance, Armed, Weapon, HealthFraction}, ... }; joins, moves, leaves are worked out
 	    adapter:step(dt)                            -- every frame: steps the session, then shows the result through the host
 
 	The host may implement any of these methods (all optional; they are called as host:name(...)):
@@ -175,6 +175,7 @@ function Adapter:syncPlayers(list)
 		end
 		if p.Stance then S.Props:setStance(p.Id, p.Stance) end
 		if p.Weapon then S.Props:setWeapon(p.Id, p.Weapon) elseif p.Armed ~= nil then S.Props:setArmed(p.Id, p.Armed) end
+		if p.HealthFraction ~= nil and S.Combat then S.Combat:setPlayerHealth(p.Id, p.HealthFraction * S.Combat.Params.PlayerMaxHealth) end
 		if p.Disguise ~= nil then S:setDisguise(p.Id, p.Disguise) end
 	end
 	for id in pairs(self.PlayerIds) do
@@ -185,6 +186,20 @@ function Adapter:syncPlayers(list)
 end
 
 -- The engine has no "remove player" yet (M9 will need one). A player who left is marked as having exited, so nobody sees or counts them.
+-- The player's own round hit a guard (called by the game's weapon script): the weapon's damage (S97 by default) goes to BreachCombat, which
+-- lowers the guard's health and kills it at 0. `botId` is the BotId attribute of the guard's model. Returns the guard's health left, or nil.
+function Adapter:hitBot(botId, playerId, weapon)
+	local combat = self.Session.Combat
+	if not combat then
+		return nil
+	end
+	local damage = combat:weaponDamage(weapon or "S97")
+	if not damage then
+		return nil
+	end
+	return combat:damageBot(botId, damage, tostring(playerId))
+end
+
 function Adapter:removePlayer(id)
 	local p = self.Session.Props and self.Session.Props:player(id)
 	if p then p.Exited = true end
