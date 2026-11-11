@@ -35,7 +35,10 @@
 
 	M9d, shooting, health and deaths (Attacking phase, lockdown landed, only guards the alert is not busy with):
 	  * A guard that SEES a player (and the player is not down) fires its weapon, one round at a time, RoundsPerSecond, hitscan. Every guard
-	    carries the S97 [R: owner]: 30 rounds, 0.5 HP per round, so a whole magazine on a player is 15 HP; rate of fire and reload time are [P].
+	    carries the S97 [R: owner]: 30 rounds per magazine. Damage is asymmetric [R: owner: "a few hits kill a guard, but a guard hardly hurts you"]:
+	    the weapon has ONE base damage (S97: 40 [P], so a placed guard of 120 HP dies in 3 hits of the player's own S97), and a guard's rounds are
+	    scaled by GuardDamageOutput (0.0125) x its class DamageOutput: 40 x 0.0125 = 0.5 HP per round, a whole magazine on a player = 15 HP [R: owner].
+	    Rate of fire and reload time are [P]. combat:weaponDamage("S97") is what the player's own rounds do to a guard.
 	  * Hit chance per round = clamp(HitChanceBase + HitChancePerSecond x seconds the player has been in its sight, base, max) [P: plan], so
 	    shooting starts inaccurate and sharpens. The rolls come from a seeded stream: same seed, same shots.
 	  * Players have PlayerMaxHealth (100) [P]; at 0 they are down (PlayerDown), and are not shot at again. The host reports healing with
@@ -58,7 +61,8 @@ Combat.Defaults = {
 	SoundTravelDistance = 80, -- studs, used when the mission setup has none [P]
 	NoticeMeter = 1, -- the sight meter at which a drawn weapon counts as seen
 	NoiseScale = { shot = 1.0, door = 0.3, footstep = 0.2 }, -- [P]
-	Weapons = { S97 = { Damage = 0.5, MagSize = 30, RoundsPerSecond = 10, ReloadSeconds = 2.5 } }, -- Damage, MagSize [R: owner]; the rest [P]
+	Weapons = { S97 = { Damage = 40, MagSize = 30, RoundsPerSecond = 10, ReloadSeconds = 2.5 } }, -- MagSize [R: owner]; Damage [P: "a few hits kill a 120 HP guard"]; the rest [P]
+	GuardDamageOutput = 0.0125, -- the share of a weapon's damage a guard's round does to a player: 40 x 0.0125 = 0.5 HP, 15 HP per magazine [R: owner]
 	GuardWeapon = "S97", -- what every guard carries for now [R: owner: "use an S97"]
 	HitChanceBase = 0.15, HitChancePerSecond = 0.1, HitChanceMax = 0.6, -- [P: plan]
 	PlayerMaxHealth = 100, -- [P] (to confirm with the owner)
@@ -347,6 +351,12 @@ function Sim:botHealth(botId)
 	return hp, info.Health, info.ShowsHealthBar
 end
 
+-- What one round of a weapon does to a GUARD (the player's own rounds are the host's: it reports them with damageBot).
+function Sim:weaponDamage(name)
+	local w = self.Params.Weapons[name or self.Params.GuardWeapon]
+	return w and w.Damage or nil
+end
+
 -- The host reports damage dealt TO a guard (the player's own weapon). Returns the guard's health after it, or nil for an unknown or dead guard.
 function Sim:damageBot(botId, amount, playerId)
 	local bot = self.Bots:bot(botId)
@@ -398,7 +408,7 @@ function Sim:_shoot(bots, dt)
 				end
 			elseif target then
 				self.Fire[id] = (self.Fire[id] or 0) + dt
-				local damage = w.Damage * self:_botInfo(bot).DamageOutput
+				local damage = w.Damage * self:_botInfo(bot).DamageOutput * p.GuardDamageOutput
 				while self.Fire[id] >= interval and not self.Down[target.Id] do
 					local ammo = self.Ammo[id]
 					if ammo == nil then

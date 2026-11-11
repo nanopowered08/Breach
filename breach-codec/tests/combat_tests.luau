@@ -337,6 +337,23 @@ return function(check)
 		check("shoot: ... so the first rounds miss more than the later ones", firstWindow > 0 and firstHits / firstWindow < 0.5)
 	end
 
+	do -- the asymmetry: the player's S97 kills a guard in a few hits, a guard's S97 hardly hurts the player [R: owner]
+		local combat, al, bots, pr, run = armedFight({ params = { HitChanceBase = 1, HitChanceMax = 1, Weapons = { S97 = { ReloadSeconds = 100 } } } })
+		check("asymmetry: the S97 does 40 per round to a guard [P], and a guard's rounds are scaled by 0.0125", combat:weaponDamage("S97") == 40 and combat.Params.GuardDamageOutput == 0.0125 and combat:weaponDamage("nope") == nil)
+		run(6)
+		check("asymmetry: a whole magazine from a guard is 15 HP on the player", math.abs(combat:playerHealth("p1") - 85) < 1e-6, combat:playerHealth("p1"))
+		local id = botId(bots, 1)
+		combat:drainEvents()
+		combat:damageBot(id, combat:weaponDamage("S97"), "p1")
+		combat:damageBot(id, combat:weaponDamage("S97"), "p1")
+		check("asymmetry: two of the player's rounds leave a placed guard (120 HP) alive", combat:botHealth(id) == 40 and #kinds(combat:drainEvents(), "BotDied") == 0)
+		combat:damageBot(id, combat:weaponDamage("S97"), "p1")
+		check("asymmetry: the third kills it", select(1, combat:botHealth(id)) == 0 and bots:all()[1].Flags.Dead == true)
+		local c2, a2, b2, p2, r2 = armedFight({ params = { HitChanceBase = 1, HitChanceMax = 1, GuardDamageOutput = 1, Weapons = { S97 = { Damage = 0.5, ReloadSeconds = 100 } } } })
+		r2(6)
+		check("asymmetry: the two numbers are parameters (0.5 base, no scaling: still 15 HP)", math.abs(c2:playerHealth("p1") - 85) < 1e-6, c2:playerHealth("p1"))
+	end
+
 	do -- a player who goes down is left alone, until healed
 		local combat, al, bots, pr, run = armedFight({ params = { HitChanceBase = 1, HitChanceMax = 1, PlayerMaxHealth = 1 } })
 		run(3)

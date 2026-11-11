@@ -267,7 +267,13 @@ return function(check)
 		session.Combat = { Params = { PlayerMaxHealth = 100 }, setPlayerHealth = function(_, id, hp) healed[#healed + 1] = id .. "=" .. tostring(hp) end }
 		a:syncPlayers({ { Id = "p1", X = 0, Y = 0, Z = 0, HealthFraction = 0.25 }, { Id = "p2", X = 0, Y = 0, Z = 0 } })
 		check("players: HealthFraction reaches Combat:setPlayerHealth scaled to PlayerMaxHealth, and only when given", #healed == 1 and healed[1] == "p1=25", table.concat(healed, ","))
+		local hits = {}
+		session.Combat = { Params = { PlayerMaxHealth = 100 }, weaponDamage = function(_, w) return w == "S97" and 40 or nil end,
+			damageBot = function(_, bot, amount, by) hits[#hits + 1] = bot .. ":" .. amount .. ":" .. by return 80 end }
+		check("hitBot: the S97's damage goes to the guard, by the player", a:hitBot("b1", 123, nil) == 80 and hits[1] == "b1:40:123", hits[1])
+		check("hitBot: an unknown weapon does nothing", a:hitBot("b1", 123, "Spoon") == nil and #hits == 1)
 		session.Combat = nil
+		check("hitBot: without the combat module it does nothing", a:hitBot("b1", 123) == nil)
 		check("players: no combat module: HealthFraction is simply ignored", pcall(function() a:syncPlayers({ { Id = "p1", X = 0, Y = 0, Z = 0, HealthFraction = 0.5 } }) end))
 	end
 

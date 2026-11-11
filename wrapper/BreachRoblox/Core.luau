@@ -186,6 +186,20 @@ function Adapter:syncPlayers(list)
 end
 
 -- The engine has no "remove player" yet (M9 will need one). A player who left is marked as having exited, so nobody sees or counts them.
+-- The player's own round hit a guard (called by the game's weapon script): the weapon's damage (S97 by default) goes to BreachCombat, which
+-- lowers the guard's health and kills it at 0. `botId` is the BotId attribute of the guard's model. Returns the guard's health left, or nil.
+function Adapter:hitBot(botId, playerId, weapon)
+	local combat = self.Session.Combat
+	if not combat then
+		return nil
+	end
+	local damage = combat:weaponDamage(weapon or "S97")
+	if not damage then
+		return nil
+	end
+	return combat:damageBot(botId, damage, tostring(playerId))
+end
+
 function Adapter:removePlayer(id)
 	local p = self.Session.Props and self.Session.Props:player(id)
 	if p then p.Exited = true end
