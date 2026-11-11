@@ -6,7 +6,7 @@ This workflow runs the Roblox adapter's mission initialization and map renderer 
 
 Add these repository secrets:
 
-- \`ROBLOX_API_KEY\`: an Open Cloud API key scoped to the test universe/place with permission to create Luau execution session tasks.
+- \`ROBLOX_API_KEY\`: an Open Cloud API key with the \`luau-execution-sessions:write\` permission for the selected test place.
 - \`ROBLOX_UNIVERSE_ID\`: the numeric universe ID.
 - \`ROBLOX_PLACE_ID\`: the numeric place ID.
 
@@ -14,7 +14,7 @@ Add this repository variable:
 
 - \`MISSION_GIST_URL\`: the HTTPS raw \`gist.githubusercontent.com\` URL for the mission source. The workflow downloads it on the GitHub runner; mission data is not committed to this repository or printed in logs.
 
-The API key must be allowed to create Luau execution session tasks for the selected place. The place should be published and configured for the loader's HTTP and \`loadstring\` requirements.
+The place should be published and configured for the loader's HTTP and \`loadstring\` requirements.
 
 ## Running it
 
