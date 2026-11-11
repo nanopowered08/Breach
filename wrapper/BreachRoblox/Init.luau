@@ -110,6 +110,13 @@ function Adapter.start(Breach, options)
 		else
 			print("[Breach] shuffle survey failed: " .. tostring(lines))
 		end
+		-- M11.1a: which target each PartCollection would go to for this seed (decided and printed only: nothing is moved yet)
+		local okL, layoutLines = pcall(function() return M.Shuffle.layoutReport(M.Shuffle.layout(info.Mission, seed), 30) end)
+		if okL then
+			for _, line in ipairs(layoutLines) do print("[Breach] " .. line) end
+		else
+			print("[Breach] layout failed: " .. tostring(layoutLines))
+		end
 	end
 
 	-- The mission's lighting preset (MissionSetup.LightingSettings), taken from the prop library's presets. Set ApplyLighting = false to keep the place's own.
