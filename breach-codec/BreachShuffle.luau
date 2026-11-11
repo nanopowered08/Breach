@@ -7,26 +7,54 @@
 
 	    local survey = Shuffle.survey(mission)      -- mission.Nodes is walked (any class, anywhere in the tree)
 	    survey.Collections   list of {Id, Path, Class, Name, Attrs, Position, Size}   nodes named "PartCollection" or carrying the attribute PartCollection
-	    survey.Targets       the same for "ShuffleTarget"
+	    survey.Targets       the same for nodes named "ShuffleTarget" (or, unnamed, carrying a ShuffleTag)
+	    survey.Movers        every OTHER node with a `ShuffleTarget` attribute: something that asks to be moved to a target
 	    survey.Folders       Folder/Model nodes with folder-level options (Condition, PickCount, PickSeed, ShuffleContents, ResolvePriority)
-	    survey.AttrCounts    { Collection = {attr = n}, Target = {attr = n}, Folder = {attr = n} }   which attributes exist, and how often
-	    survey.Values        { ShuffleTag = {value = n}, Index = ..., MatchVariable = ..., ResolvePriority = ... }   over collections and targets
-	    survey.Tags          { [tag] = {Collections = n, Targets = n, Indexes = {index = n}} }
-	    survey.Totals        {Collections, Targets, Folders}
+	    survey.AttrCounts    { Collection = {attr = n}, Target = {attr = n}, Mover = {attr = n}, Folder = {attr = n} }   which attributes exist, and how often
+	    survey.Values        { ShuffleTag = {value = n}, Index, MatchVariable, ResolvePriority, Move, Open, Path, Location, Sound, OnProp, ... }
+	    survey.Tags          { [tag] = {Collections, Movers, Targets, Indexes = {index = n}, AskSizes = {"AxBxC" = n}, TargetSizes = {...}} }
+	    survey.MoverKinds    { ["Class:Name"] = n }
+	    survey.Totals        {Collections, Targets, Movers, Folders}
+
+	What the Blacksite data showed (docs 7.5): every PartCollection carries `ShuffleTarget = <tag>` (the tag it wants, NOT a target itself),
+	the tags (`ShuffleTag`) live on the targets, `MatchVariable` is empty on every target and `ResolvePriority` is 2 everywhere.
 	    Shuffle.report(survey, maxLines)            -- the survey as lines of text (the adapter prints it)
 
 	What `MatchVariable` and `ResolvePriority` mean is not documented anywhere (see the plan): the survey exists so the real data can say.
 ]==]
 
 local Shuffle = {}
-Shuffle.VERSION = "0.1.0"
+Shuffle.VERSION = "0.2.0"
 
 local FOLDER_ATTRS = { "Condition", "PickCount", "PickSeed", "ShuffleContents", "ResolvePriority" }
-local VALUE_ATTRS = { "ShuffleTag", "Index", "MatchVariable", "ResolvePriority" }
+local VALUE_ATTRS = { "ShuffleTag", "Index", "MatchVariable", "ResolvePriority", "ShuffleTargetRotation", "Move", "Open", "Path", "Location", "Sound", "OnProp", "CollectionEnabled", "RemovedVariable", "InstantOpenDoorDetection", "LockOutPlayers" }
 local MAX_DISTINCT = 60 -- distinct values kept per attribute; the rest are counted under "(others)"
 
 local function bump(t, key, n)
 	t[key] = (t[key] or 0) + (n or 1)
+end
+
+-- a stable text for an attribute value (never a table address)
+local function show(v)
+	local t = type(v)
+	if t == "string" then
+		return v
+	elseif t == "number" or t == "boolean" then
+		return tostring(v)
+	elseif t == "table" then
+		if type(v.X) == "number" and type(v.Y) == "number" and type(v.Z) == "number" then
+			return "(" .. tostring(v.X) .. "," .. tostring(v.Y) .. "," .. tostring(v.Z) .. ")"
+		end
+		return "{" .. tostring(v.Type or "table") .. "}"
+	end
+	return t
+end
+
+local function sizeKey(size)
+	if size then
+		return tostring(size.X) .. "x" .. tostring(size.Y) .. "x" .. tostring(size.Z)
+	end
+	return nil
 end
 
 local function xyz(v)
@@ -48,10 +76,10 @@ end
 
 function Shuffle.survey(mission)
 	local s = {
-		Collections = {}, Targets = {}, Folders = {},
-		AttrCounts = { Collection = {}, Target = {}, Folder = {} },
-		Values = {}, Tags = {},
-		Totals = { Collections = 0, Targets = 0, Folders = 0 },
+		Collections = {}, Targets = {}, Movers = {}, Folders = {},
+		AttrCounts = { Collection = {}, Target = {}, Mover = {}, Folder = {} },
+		Values = {}, Tags = {}, MoverKinds = {},
+		Totals = { Collections = 0, Targets = 0, Movers = 0, Folders = 0 },
 		Warnings = {},
 	}
 	for _, a in ipairs(VALUE_ATTRS) do
@@ -68,7 +96,7 @@ function Shuffle.survey(mission)
 		for _, a in ipairs(VALUE_ATTRS) do
 			local v = attrs[a]
 			if v ~= nil then
-				local bucket, key = s.Values[a], tostring(v)
+				local bucket, key = s.Values[a], show(v)
 				if bucket[key] == nil then
 					if (distinct[a] or 0) < MAX_DISTINCT then
 						distinct[a] = (distinct[a] or 0) + 1
@@ -80,45 +108,80 @@ function Shuffle.survey(mission)
 			end
 		end
 	end
+	local function tagEntry(tag)
+		local t = s.Tags[tag]
+		if not t then
+			t = { Collections = 0, Movers = 0, Targets = 0, Indexes = {}, AskSizes = {}, TargetSizes = {} }
+			s.Tags[tag] = t
+		end
+		return t
+	end
+	-- the tag a collection or mover asks for: its `ShuffleTarget` attribute (a string) [O: Blacksite], or a ShuffleTag
+	local function askedTag(attrs)
+		if type(attrs.ShuffleTarget) == "string" and attrs.ShuffleTarget ~= "" then
+			return attrs.ShuffleTarget
+		end
+		if attrs.ShuffleTag ~= nil then
+			return show(attrs.ShuffleTag)
+		end
+		return nil
+	end
 
 	for _, node in ipairs(nodes) do
 		local attrs = node.Attrs or {}
 		local isCollection = node.Name == "PartCollection" or attrs.PartCollection ~= nil
-		local isTarget = node.Name == "ShuffleTarget" or attrs.ShuffleTarget ~= nil
+		local isTarget = not isCollection and (node.Name == "ShuffleTarget" or attrs.ShuffleTag ~= nil)
+		local isMover = not isCollection and not isTarget and attrs.ShuffleTarget ~= nil
 		if isCollection then
-			s.Collections[#s.Collections + 1] = describe(node, "Collection")
+			local d = describe(node, "Collection")
+			s.Collections[#s.Collections + 1] = d
 			s.Totals.Collections += 1
 			for k in pairs(attrs) do
 				bump(s.AttrCounts.Collection, k)
 			end
 			addValues(attrs)
-		end
-		if isTarget then
-			s.Targets[#s.Targets + 1] = describe(node, "Target")
+			local tag = askedTag(attrs)
+			if tag then
+				local t = tagEntry(tag)
+				t.Collections += 1
+				if d.Size then
+					bump(t.AskSizes, sizeKey(d.Size))
+				end
+				if attrs.Index ~= nil then
+					bump(t.Indexes, show(attrs.Index))
+				end
+			end
+		elseif isTarget then
+			local d = describe(node, "Target")
+			s.Targets[#s.Targets + 1] = d
 			s.Totals.Targets += 1
 			for k in pairs(attrs) do
 				bump(s.AttrCounts.Target, k)
 			end
 			addValues(attrs)
-		end
-		if (isCollection or isTarget) and attrs.ShuffleTag ~= nil then
-			local tag = tostring(attrs.ShuffleTag)
-			local t = s.Tags[tag]
-			if not t then
-				t = { Collections = 0, Targets = 0, Indexes = {} }
-				s.Tags[tag] = t
-			end
-			if isCollection then
-				t.Collections += 1
-			end
-			if isTarget then
+			if attrs.ShuffleTag ~= nil then
+				local t = tagEntry(show(attrs.ShuffleTag))
 				t.Targets += 1
+				if d.Size then
+					bump(t.TargetSizes, sizeKey(d.Size))
+				end
+				if attrs.Index ~= nil then
+					bump(t.Indexes, show(attrs.Index))
+				end
 			end
-			if attrs.Index ~= nil then
-				bump(t.Indexes, tostring(attrs.Index))
+		elseif isMover then
+			s.Movers[#s.Movers + 1] = describe(node, "Mover")
+			s.Totals.Movers += 1
+			bump(s.MoverKinds, node.ClassName .. ":" .. tostring(node.Name))
+			for k in pairs(attrs) do
+				bump(s.AttrCounts.Mover, k)
 			end
-		end
-		if not isCollection and not isTarget and (node.ClassName == "Folder" or node.ClassName == "Model") then
+			addValues(attrs)
+			local tag = askedTag(attrs)
+			if tag then
+				tagEntry(tag).Movers += 1
+			end
+		elseif node.ClassName == "Folder" or node.ClassName == "Model" then
 			local found = false
 			for _, a in ipairs(FOLDER_ATTRS) do
 				if attrs[a] ~= nil then
@@ -136,6 +199,21 @@ function Shuffle.survey(mission)
 		s.Warnings[#s.Warnings + 1] = "no PartCollection or ShuffleTarget found: the mission has no physical shuffle"
 	elseif s.Totals.Collections == 0 or s.Totals.Targets == 0 then
 		s.Warnings[#s.Warnings + 1] = ("PartCollection %d, ShuffleTarget %d: one side is missing, nothing can be moved"):format(s.Totals.Collections, s.Totals.Targets)
+	end
+	-- demand against supply, tag by tag (sorted, so the text is deterministic)
+	local names = {}
+	for tag in pairs(s.Tags) do
+		names[#names + 1] = tag
+	end
+	table.sort(names)
+	for _, tag in ipairs(names) do
+		local g = s.Tags[tag]
+		local asks = g.Collections + g.Movers
+		if asks > 0 and g.Targets == 0 then
+			s.Warnings[#s.Warnings + 1] = ("tag %s is asked for by %d but has no target"):format(tag, asks)
+		elseif asks > g.Targets then
+			s.Warnings[#s.Warnings + 1] = ("tag %s is asked for by %d but has only %d targets (are targets reused?)"):format(tag, asks, g.Targets)
+		end
 	end
 	return s
 end
@@ -169,19 +247,23 @@ end
 function Shuffle.report(survey, maxLines)
 	maxLines = maxLines or 40
 	local lines = {}
-	local function add(s)
-		lines[#lines + 1] = s
+	local function add(text)
+		lines[#lines + 1] = text
 	end
 	local t = survey.Totals
-	add(("%d PartCollection, %d ShuffleTarget, %d folders with folder-level options"):format(t.Collections, t.Targets, t.Folders))
-	for _, kind in ipairs({ "Collection", "Target", "Folder" }) do
-		local text, n = top(survey.AttrCounts[kind], 14)
+	add(("%d PartCollection, %d ShuffleTarget, %d movers (other nodes with a ShuffleTarget attribute), %d folders with folder-level options"):format(t.Collections, t.Targets, t.Movers or 0, t.Folders))
+	for _, kind in ipairs({ "Collection", "Target", "Mover", "Folder" }) do
+		local text, n = top(survey.AttrCounts[kind] or {}, 16)
 		if n > 0 then
 			add(("%s attributes: %s"):format(kind, text))
 		end
 	end
+	local mk, mn = top(survey.MoverKinds or {}, 8)
+	if mn > 0 then
+		add(("movers by kind: %s"):format(mk))
+	end
 	for _, a in ipairs(VALUE_ATTRS) do
-		local text, n = top(survey.Values[a], 12, true)
+		local text, n = top(survey.Values[a], 10, true)
 		if n > 0 then
 			add(("%s (%d distinct): %s"):format(a, n, text))
 		end
@@ -194,7 +276,18 @@ function Shuffle.report(survey, maxLines)
 	for _, tag in ipairs(tags) do
 		local g = survey.Tags[tag]
 		local idx = top(g.Indexes, 10, true)
-		add(("tag %s: %d collections, %d targets%s"):format(tag, g.Collections, g.Targets, idx ~= "" and (", indexes " .. idx) or ""))
+		local ask, tgt = top(g.AskSizes or {}, 2), top(g.TargetSizes or {}, 2)
+		local line = ("tag %s: %d collections, %d targets"):format(tag, g.Collections, g.Targets)
+		if (g.Movers or 0) > 0 then
+			line ..= (", %d movers"):format(g.Movers)
+		end
+		if idx ~= "" then
+			line ..= ", indexes " .. idx
+		end
+		if ask ~= "" or tgt ~= "" then
+			line ..= (", sizes: ask [%s] targets [%s]"):format(ask, tgt)
+		end
+		add(line)
 	end
 	for _, w in ipairs(survey.Warnings) do
 		add("warning: " .. w)

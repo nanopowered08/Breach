@@ -47,6 +47,14 @@ Synthetic missions (a few collections and targets with known tags and indexes) c
 - **M10 Hacking + intel** (`NetworkId` graph, `CustomHack` x26, `HackingNodeStatus` x12 in the Blacksite, tablet UI) and **M12 Encode + Standalone** (export a mission back to an IE code with round-trip *equivalence*, and to the Standalone folder format) each get their own plan when their turn comes, as M9 and this one did.
 - **Order** (the HANDOFF's, updated): M11.0 -> M11.1 (the Blacksite looks right) -> door access in `BreachNav` (second suspect for path failures) -> M9a -> M10 -> M12.
 
+## 5b. What the first Blacksite run showed (Nov 2026, M11.0 output) [O]
+
+- 103 `PartCollection`, 529 `ShuffleTarget` (the first survey also counted 282 other nodes that merely carry a `ShuffleTarget` attribute: the 103 collections and 179 more; M11.0b separates them).
+- **A collection names the tag it wants in its own `ShuffleTarget` attribute**; the tags (`ShuffleTag`, 43 distinct, e.g. `Zone1_TJunctionSmall` 49 targets, `Zone1_CornerVent` 33, `Zone1_Spacer` 27) are on the targets. So the rule to build is: *each collection goes to one of the targets with the tag it asks for*.
+- **`MatchVariable` is empty on all 529 targets**: it is not used in the Blacksite, so the open question below is answered for this map. `ResolvePriority` is 2 on every collection and target, so it does not order anything here either.
+- Other target attributes seen: `Path` 142, `Sound` 92, `Move` 90, `Open` 90, `Location` 52, `OnProp` 42 and on collections `ShuffleTargetRotation` 11, `OnProp` 9, `CollectionEnabled` 1, `RemovedVariable` 1: meaning unknown; M11.0b prints their value distributions, and the demand-against-supply per tag.
+- Folders with options: `Condition` 15 (done in BreachProps), `ResolvePriority` 8, `ShuffleContents` 3, `PickCount` 1, `PickSeed` 1.
+
 ## 6. Open (one question)
 
-**Do you know what `MatchVariable` does on a `ShuffleTarget`?** If not, no problem: M11.0 prints it from the Blacksite data and I propose the rule from that, for you to confirm.
+**Answered for the Blacksite** (5b): `MatchVariable` is empty there. What is still open is how many collections a tag's targets serve (does a target take one collection, or can it be reused?): M11.0b prints demand against supply per tag, and the rule follows from that.

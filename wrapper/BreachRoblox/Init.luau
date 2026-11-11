@@ -104,7 +104,7 @@ function Adapter.start(Breach, options)
 
 	-- M11.0: what the mission declares about shuffling its layout (PartCollection / ShuffleTarget, folder-level options). Information only: nothing is moved yet.
 	if options.ShuffleSurvey ~= false then
-		local okS, lines = pcall(function() return M.Shuffle.report(M.Shuffle.survey(info.Mission), 25) end)
+		local okS, lines = pcall(function() return M.Shuffle.report(M.Shuffle.survey(info.Mission), 90) end)
 		if okS then
 			for _, line in ipairs(lines) do print("[Breach] shuffle: " .. line) end
 		else
@@ -153,6 +153,17 @@ function Adapter.start(Breach, options)
 					end
 					print(okP and ("[Breach] props placed: %d models from %d placeholders (%d placeholders of %d kinds not in the library, not drawn)"):format(placed, #placements, skippedCount, skippedKinds)
 						or ("[Breach] prop render failed: " .. tostring(placed)))
+					-- which kinds, so it is clear what is missing (many are logic markers that are not meant to be seen)
+					local kinds = {}
+					for name, count in pairs(skipped) do
+						kinds[#kinds + 1] = { name = name, count = count }
+					end
+					table.sort(kinds, function(a, b) if a.count ~= b.count then return a.count > b.count end return a.name < b.name end)
+					local parts = {}
+					for i = 1, math.min(#kinds, 40) do
+						parts[#parts + 1] = kinds[i].name .. "=" .. kinds[i].count
+					end
+					if #parts > 0 then print("[Breach] not drawn: " .. table.concat(parts, ", ")) end
 				end
 			end
 		end)
