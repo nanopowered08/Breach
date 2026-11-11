@@ -20,11 +20,33 @@
 	the tags (`ShuffleTag`) live on the targets, `MatchVariable` is empty on every target and `ResolvePriority` is 2 everywhere.
 	    Shuffle.report(survey, maxLines)            -- the survey as lines of text (the adapter prints it)
 
+	M11.1a, the LAYOUT: which target each PartCollection goes to. Still decides only: nothing is moved yet (M11.1b applies it).
+
+	    local layout = Shuffle.layout(mission, seed)
+	    layout.Placements   list of {Collection, Path, Tag, Target, TargetPath, Index, Steps, Yaw, From, To}  From/To = the collection's centre before and after
+	    layout.Unplaced     list of {Collection, Path, Tag, Why}      "no target" | "not enough targets" | "no tag" | "no position"
+	    layout.Stats        {Collections, Placed, Unplaced}
+	    Shuffle.moved(placement, x, y, z) -> x, y, z       where a point that was inside the collection ends up
+	    Shuffle.inside(collection, x, y, z) -> bool        is the point inside the collection volume (a box, turned by its yaw)
+	    Shuffle.layoutReport(layout, maxLines)             the layout as text
+
+	Rules, from the Blacksite data [O] and the plan [P]: a collection asks for the tag in its own `ShuffleTarget` attribute; it is given ONE
+	target with that tag, never shared (every tag has more targets than collections there); which one comes from the seed (Fisher-Yates over
+	the tag's targets, tags in alphabetical order, collections in mission order: same seed, same layout). The collection ends up with its
+	FLOOR on the target's floor and its centre above the target's centre (the target is the floor footprint, e.g. 24x12x24 for a 32x28x32
+	collection) [P], turned by (target yaw - collection yaw) [P]; a collection with `ShuffleTargetRotation = n` is also turned by a random
+	multiple of 360/n degrees [P: the meaning of n]. A collection whose tag has no target, or fewer targets than collections, is left
+	unplaced. `CollectionEnabled` (a variable expression) is not evaluated yet; movers are not moved yet.
+
 	What `MatchVariable` and `ResolvePriority` mean is not documented anywhere (see the plan): the survey exists so the real data can say.
 ]==]
 
+local Random = (function()
+--@@RANDOM@@
+end)()
+
 local Shuffle = {}
-Shuffle.VERSION = "0.2.0"
+Shuffle.VERSION = "0.3.0"
 
 local FOLDER_ATTRS = { "Condition", "PickCount", "PickSeed", "ShuffleContents", "ResolvePriority" }
 local VALUE_ATTRS = { "ShuffleTag", "Index", "MatchVariable", "ResolvePriority", "ShuffleTargetRotation", "Move", "Open", "Path", "Location", "Sound", "OnProp", "CollectionEnabled", "RemovedVariable", "InstantOpenDoorDetection", "LockOutPlayers" }
@@ -71,7 +93,19 @@ local function describe(node, kind)
 		Id = node.Id, Path = node.Path, Class = node.ClassName, Name = node.Name, Kind = kind,
 		Attrs = node.Attrs or {},
 		Position = xyz(cf and cf.Position), Size = xyz(props and props.Size),
+		Yaw = (cf and cf.EulerXYZ and type(cf.EulerXYZ.Y) == "number") and cf.EulerXYZ.Y or 0,
 	}
+end
+
+-- the tag a collection or mover asks for: its `ShuffleTarget` attribute (a string) [O: Blacksite], or a ShuffleTag
+local function askedTag(attrs)
+	if type(attrs.ShuffleTarget) == "string" and attrs.ShuffleTarget ~= "" then
+		return attrs.ShuffleTarget
+	end
+	if attrs.ShuffleTag ~= nil then
+		return show(attrs.ShuffleTag)
+	end
+	return nil
 end
 
 function Shuffle.survey(mission)
@@ -116,17 +150,6 @@ function Shuffle.survey(mission)
 		end
 		return t
 	end
-	-- the tag a collection or mover asks for: its `ShuffleTarget` attribute (a string) [O: Blacksite], or a ShuffleTag
-	local function askedTag(attrs)
-		if type(attrs.ShuffleTarget) == "string" and attrs.ShuffleTarget ~= "" then
-			return attrs.ShuffleTarget
-		end
-		if attrs.ShuffleTag ~= nil then
-			return show(attrs.ShuffleTag)
-		end
-		return nil
-	end
-
 	for _, node in ipairs(nodes) do
 		local attrs = node.Attrs or {}
 		local isCollection = node.Name == "PartCollection" or attrs.PartCollection ~= nil
@@ -298,6 +321,143 @@ function Shuffle.report(survey, maxLines)
 			lines[i] = nil
 		end
 		add(("... (%d more lines)"):format(extra))
+	end
+	return lines
+end
+
+---------------------------------------------------------------------------------------------------------- M11.1a: the layout
+local function lastName(path)
+	return tostring(path or "?"):match("([^/]+)$") or tostring(path)
+end
+
+function Shuffle.layout(mission, seed, opts)
+	local survey = Shuffle.survey(mission)
+	local rng = Random.new(seed or 0)
+	local result = { Seed = seed, Placements = {}, Unplaced = {}, Stats = { Collections = #survey.Collections, Placed = 0, Unplaced = 0 } }
+
+	local targetsBy = {}
+	for _, t in ipairs(survey.Targets) do
+		if t.Attrs.ShuffleTag ~= nil then
+			local tag = show(t.Attrs.ShuffleTag)
+			targetsBy[tag] = targetsBy[tag] or {}
+			table.insert(targetsBy[tag], t)
+		end
+	end
+	local asks, tags = {}, {}
+	local function unplace(c, tag, why)
+		result.Unplaced[#result.Unplaced + 1] = { Collection = c.Id, Path = c.Path, Tag = tag, Why = why }
+		result.Stats.Unplaced += 1
+	end
+	for _, c in ipairs(survey.Collections) do
+		local tag = askedTag(c.Attrs)
+		if not tag then
+			unplace(c, nil, "no tag")
+		elseif not (c.Position and c.Size) then
+			unplace(c, tag, "no position")
+		else
+			if not asks[tag] then
+				asks[tag] = {}
+				tags[#tags + 1] = tag
+			end
+			table.insert(asks[tag], c)
+		end
+	end
+	table.sort(tags)
+
+	for _, tag in ipairs(tags) do
+		local targets = {}
+		for _, t in ipairs(targetsBy[tag] or {}) do
+			if t.Position and t.Size then
+				targets[#targets + 1] = t
+			end
+		end
+		for i = #targets, 2, -1 do -- Fisher-Yates: the seed decides which targets are used and in which order
+			local j = rng:nextInt(1, i)
+			targets[i], targets[j] = targets[j], targets[i]
+		end
+		for i, c in ipairs(asks[tag]) do
+			local t = targets[i]
+			if not t then
+				unplace(c, tag, #targets == 0 and "no target" or "not enough targets")
+			else
+				local steps, n = 0, tonumber(c.Attrs.ShuffleTargetRotation)
+				if n and n >= 2 and n == math.floor(n) then
+					steps = rng:nextInt(0, n - 1)
+				end
+				local yaw = (t.Yaw or 0) - (c.Yaw or 0)
+				if steps > 0 then
+					yaw += steps * (2 * math.pi / n)
+				end
+				local floorY = t.Position.Y - t.Size.Y / 2
+				result.Placements[#result.Placements + 1] = {
+					Collection = c.Id, Path = c.Path, Tag = tag, Target = t.Id, TargetPath = t.Path, Index = i, Steps = steps, Yaw = yaw,
+					From = { X = c.Position.X, Y = c.Position.Y, Z = c.Position.Z },
+					To = { X = t.Position.X, Y = floorY + c.Size.Y / 2, Z = t.Position.Z }, -- floor on floor, centre over the target's centre [P]
+					Size = { X = c.Size.X, Y = c.Size.Y, Z = c.Size.Z },
+				}
+				result.Stats.Placed += 1
+			end
+		end
+	end
+	return result
+end
+
+-- where a point that was inside the collection ends up (rotate about the collection's old centre by Yaw, then move to the new centre)
+function Shuffle.moved(placement, x, y, z)
+	local dx, dz = x - placement.From.X, z - placement.From.Z
+	local c, s = math.cos(placement.Yaw), math.sin(placement.Yaw)
+	return placement.To.X + dx * c + dz * s, y - placement.From.Y + placement.To.Y, placement.To.Z - dx * s + dz * c
+end
+
+-- is the point inside the collection volume (a box turned by the collection's own yaw)?
+function Shuffle.inside(collection, x, y, z)
+	if not (collection.Position and collection.Size) then
+		return false
+	end
+	local yaw = collection.Yaw or 0
+	local dx, dz = x - collection.Position.X, z - collection.Position.Z
+	local c, s = math.cos(-yaw), math.sin(-yaw)
+	local lx, lz = dx * c + dz * s, -dx * s + dz * c
+	return math.abs(lx) <= collection.Size.X / 2 and math.abs(y - collection.Position.Y) <= collection.Size.Y / 2 and math.abs(lz) <= collection.Size.Z / 2
+end
+
+function Shuffle.layoutReport(layout, maxLines)
+	maxLines = maxLines or 20
+	local lines = {}
+	local st = layout.Stats
+	lines[#lines + 1] = ("layout (seed %s): %d of %d collections placed on targets, %d unplaced"):format(tostring(layout.Seed), st.Placed, st.Collections, st.Unplaced)
+	local why = {}
+	for _, u in ipairs(layout.Unplaced) do
+		local key = u.Why .. (u.Tag and (": " .. u.Tag) or "")
+		why[key] = (why[key] or 0) + 1
+	end
+	local text, n = top(why, 10)
+	if n > 0 then
+		lines[#lines + 1] = "unplaced: " .. text
+	end
+	local turned = 0
+	for _, p in ipairs(layout.Placements) do
+		if p.Steps > 0 then
+			turned += 1
+		end
+	end
+	if turned > 0 then
+		lines[#lines + 1] = ("%d collections also turned by a random step (ShuffleTargetRotation)"):format(turned)
+	end
+	local SAMPLE = 12
+	for i, p in ipairs(layout.Placements) do
+		if i > SAMPLE then
+			lines[#lines + 1] = ("... (%d more placements)"):format(#layout.Placements - SAMPLE)
+			break
+		end
+		lines[#lines + 1] = ("%s #%d: %s -> %s (turned %d degrees)"):format(p.Tag, p.Index, lastName(p.Path), lastName(p.TargetPath), math.floor(math.deg(p.Yaw) % 360 + 0.5))
+	end
+	if #lines > maxLines then
+		local extra = #lines - (maxLines - 1)
+		for i = #lines, maxLines, -1 do
+			lines[i] = nil
+		end
+		lines[#lines + 1] = ("... (%d more lines)"):format(extra)
 	end
 	return lines
 end

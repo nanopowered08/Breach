@@ -78,6 +78,92 @@ return function(check)
 		check("blacksite: the report lists the mover kinds", string.find(text, "movers by kind: Part:DoorMetal=1", 1, true) ~= nil, text)
 	end
 
+	-------------------------------------------------------------------------------- M11.1a: the layout
+	do
+		local function item(name, attrs, x, y, z, sx, sy, sz, yaw)
+			counter += 1
+			return { Id = "n" .. counter, Path = "M/" .. name .. counter, ClassName = "Part", Name = name, Attrs = attrs or {}, Children = {},
+				Props = { CFrame = { Position = { X = x, Y = y, Z = z }, EulerXYZ = { X = 0, Y = yaw or 0, Z = 0 } }, Size = { X = sx, Y = sy, Z = sz } } }
+		end
+		-- 3 collections ask for tag A (7 targets), 1 for B (1 target, 4 rotation steps), 2 for C (1 target: not enough), 1 for D (none), 1 has no tag
+		local L = {}
+		for i = 1, 3 do L[#L + 1] = item("PartCollection", { ShuffleTarget = "A" }, i * 100, 14, 0, 32, 28, 32) end
+		L[#L + 1] = item("PartCollection", { ShuffleTarget = "B", ShuffleTargetRotation = 4 }, 400, 14, 0, 32, 28, 32)
+		for i = 1, 2 do L[#L + 1] = item("PartCollection", { ShuffleTarget = "C" }, 500 + i, 14, 0, 20, 28, 20) end
+		L[#L + 1] = item("PartCollection", { ShuffleTarget = "D" }, 600, 14, 0, 20, 28, 20)
+		L[#L + 1] = item("PartCollection", {}, 700, 14, 0, 20, 28, 20)
+		for i = 1, 7 do L[#L + 1] = item("ShuffleTarget", { ShuffleTag = "A" }, 1000 + i * 50, 6, 200, 24, 12, 24) end
+		L[#L + 1] = item("ShuffleTarget", { ShuffleTag = "B" }, 2000, 6, 300, 24, 12, 24, math.pi / 2)
+		L[#L + 1] = item("ShuffleTarget", { ShuffleTag = "C" }, 3000, 6, 400, 12, 12, 12)
+
+		local lay = Shuffle.layout(mission(L), 123)
+		check("layout: placements and unplaced add up to the collections", lay.Stats.Collections == 8 and lay.Stats.Placed + lay.Stats.Unplaced == 8 and #lay.Placements == lay.Stats.Placed)
+		local byTag, used, dup = {}, {}, false
+		for _, p in ipairs(lay.Placements) do
+			byTag[p.Tag] = (byTag[p.Tag] or 0) + 1
+			if used[p.Target] then dup = true end
+			used[p.Target] = true
+		end
+		check("layout: every collection of a tag with enough targets is placed (A 3, B 1, C 1)", byTag.A == 3 and byTag.B == 1 and byTag.C == 1 and lay.Stats.Placed == 5, lay.Stats.Placed)
+		check("layout: a target is never used twice", dup == false)
+		local whys = {}
+		for _, u in ipairs(lay.Unplaced) do whys[u.Why .. ":" .. tostring(u.Tag)] = true end
+		check("layout: a tag with too few targets leaves the extra collection unplaced", whys["not enough targets:C"] == true)
+		check("layout: a tag with no target, and a collection with no tag, are reported", whys["no target:D"] == true and whys["no tag:nil"] == true and #lay.Unplaced == 3)
+		local right = true
+		for _, p in ipairs(lay.Placements) do
+			if p.Tag == "A" and not (p.To.X >= 1050 and p.To.X <= 1350 and p.To.Z == 200) then right = false end
+		end
+		check("layout: an A collection lands on one of the A targets", right)
+
+		-- determinism and the seed
+		local function sig(seed)
+			local t = {}
+			for _, p in ipairs(Shuffle.layout(mission(L), seed).Placements) do t[#t + 1] = p.Tag .. ">" .. tostring(p.To.X) .. "/" .. p.Steps end
+			return table.concat(t, ",")
+		end
+		check("layout: the same seed gives the same layout", sig(5) == sig(5))
+		local different = false
+		for seed = 6, 40 do if sig(seed) ~= sig(5) then different = true break end end
+		check("layout: other seeds give other layouts", different)
+
+		-- geometry: floor on floor, turned by (target yaw - collection yaw)
+		local pB
+		for _, p in ipairs(lay.Placements) do if p.Tag == "B" then pB = p end end
+		check("layout: the collection's floor sits on the target's floor (target 12 high at y 6, collection 28 high: centre y 14)", pB ~= nil and math.abs(pB.To.Y - 14) < 1e-9 and pB.To.X == 2000 and pB.To.Z == 300)
+		check("layout: ShuffleTargetRotation = 4 adds a whole number of quarter turns on top of the target's own yaw", pB ~= nil and pB.Steps >= 0 and pB.Steps <= 3 and math.abs(((pB.Yaw - math.pi / 2) / (math.pi / 2)) - pB.Steps) < 1e-9)
+		local seen = {}
+		for seed = 1, 60 do for _, p in ipairs(Shuffle.layout(mission(L), seed).Placements) do if p.Tag == "B" then seen[p.Steps] = true end end end
+		check("layout: over many seeds all four quarter turns occur", seen[0] and seen[1] and seen[2] and seen[3])
+		local noRot = Shuffle.layout(mission({ item("PartCollection", { ShuffleTarget = "Z" }, 0, 14, 0, 32, 28, 32), item("ShuffleTarget", { ShuffleTag = "Z" }, 50, 6, 50, 24, 12, 24, math.pi) }), 1)
+		check("layout: without ShuffleTargetRotation the turn is only target yaw minus collection yaw", #noRot.Placements == 1 and noRot.Placements[1].Steps == 0 and math.abs(noRot.Placements[1].Yaw - math.pi) < 1e-9)
+
+		-- moving points
+		local p0 = { From = { X = 0, Y = 14, Z = 0 }, To = { X = 100, Y = 14, Z = 50 }, Yaw = 0 }
+		local x, y, z = Shuffle.moved(p0, 5, 17, 2)
+		check("layout: moved, no turn: the offset from the centre is kept", x == 105 and y == 17 and z == 52)
+		local p90 = { From = { X = 0, Y = 14, Z = 0 }, To = { X = 100, Y = 20, Z = 50 }, Yaw = math.pi / 2 }
+		x, y, z = Shuffle.moved(p90, 5, 17, 0)
+		check("layout: moved, a quarter turn about the old centre, up 6 to the new floor", math.abs(x - 100) < 1e-9 and math.abs(y - 23) < 1e-9 and math.abs(z - 45) < 1e-9, x .. "," .. y .. "," .. z)
+		x, y, z = Shuffle.moved(p90, 0, 14, 0)
+		check("layout: the old centre goes to the new centre", math.abs(x - 100) < 1e-9 and y == 20 and math.abs(z - 50) < 1e-9)
+
+		-- inside
+		local col = { Position = { X = 0, Y = 14, Z = 0 }, Size = { X = 40, Y = 28, Z = 10 }, Yaw = 0 }
+		check("layout: inside a box", Shuffle.inside(col, 19, 14, 4) and not Shuffle.inside(col, 21, 14, 0) and not Shuffle.inside(col, 0, 29, 0) and not Shuffle.inside(col, 0, 14, 6))
+		col.Yaw = math.pi / 2
+		check("layout: inside a box turned a quarter: the long side now runs along z", Shuffle.inside(col, 4, 14, 19) and not Shuffle.inside(col, 19, 14, 4))
+		check("layout: a collection without a size contains nothing", Shuffle.inside({}, 0, 0, 0) == false)
+
+		-- the report
+		local lines = Shuffle.layoutReport(lay)
+		check("layout: the report says how many are placed", lines[1] == "layout (seed 123): 5 of 8 collections placed on targets, 3 unplaced", lines[1])
+		local text = table.concat(lines, "\n")
+		check("layout: the report names why collections are unplaced and shows placements", string.find(text, "unplaced:", 1, true) ~= nil and string.find(text, "not enough targets: C=1", 1, true) ~= nil and string.find(text, "A #1:", 1, true) ~= nil, text)
+		check("layout: the report can be cut", #Shuffle.layoutReport(lay, 3) <= 3)
+		check("layout: no mission: an empty layout, no crash", Shuffle.layout(nil, 1).Stats.Collections == 0)
+	end
+
 	-- degenerate missions
 	local e = Shuffle.survey(mission({ node("Part", "WoodChair", {}) }))
 	check("shuffle: no shuffle in the mission: totals are zero and it says so", e.Totals.Collections == 0 and e.Totals.Targets == 0 and #e.Warnings == 1 and string.find(e.Warnings[1], "no physical shuffle", 1, true) ~= nil)

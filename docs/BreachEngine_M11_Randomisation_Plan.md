@@ -31,7 +31,7 @@ All of it stays portable Luau (no Roblox APIs) inside the engine; the adapter on
 | # | What | Done when |
 |---|---|---|
 | **M11.0** | **Survey, no behaviour change.** `BreachShuffle.survey(mission)`: lists every `PartCollection` and `ShuffleTarget` with all its attributes, grouped by tag and index, plus the folder-level attributes; the adapter prints a summary | the Blacksite summary shows what `MatchVariable` and `ResolvePriority` really hold, so the rules in 2.3 can be settled from data |
-| **M11.1** | **Deterministic layout.** `BreachShuffle.layout(mission, seed)` and the transform applied in `BreachWorld.build`, props, Meadow map, spawns | seed 416 gives index 1 everywhere **[R]**; the same seed twice gives the same layout; different seeds give different ones; BotPathFailed is measured before and after |
+| **M11.1** *(a done: the layout is decided and printed, docs 7.5; b: apply it)* | **Deterministic layout.** `BreachShuffle.layout(mission, seed)` and the transform applied in `BreachWorld.build`, props, Meadow map, spawns | seed 416 gives index 1 everywhere **[R]**; the same seed twice gives the same layout; different seeds give different ones; BotPathFailed is measured before and after |
 | **M11.2** | **Folder level:** `Condition`, `PickCount`/`PickSeed`, `ShuffleContents`, `ResolvePriority` | folders are removed or reordered per seed; tested with synthetic missions |
 | **M11.3** | **`HiddenShuffle`** state component (`FrontCount`, `BackCount`, `RevealCount[Variable]`, `RevealAllCondition`, `Fail[Count]Variable`, `Seed`, `HiddenShuffleId`) | guaranteed-not-first and guaranteed-last windows hold over thousands of seeds |
 
@@ -54,6 +54,14 @@ Synthetic missions (a few collections and targets with known tags and indexes) c
 - **`MatchVariable` is empty on all 529 targets**: it is not used in the Blacksite, so the open question below is answered for this map. `ResolvePriority` is 2 on every collection and target, so it does not order anything here either.
 - Other target attributes seen: `Path` 142, `Sound` 92, `Move` 90, `Open` 90, `Location` 52, `OnProp` 42 and on collections `ShuffleTargetRotation` 11, `OnProp` 9, `CollectionEnabled` 1, `RemovedVariable` 1: meaning unknown; M11.0b prints their value distributions, and the demand-against-supply per tag.
 - Folders with options: `Condition` 15 (done in BreachProps), `ResolvePriority` 8, `ShuffleContents` 3, `PickCount` 1, `PickSeed` 1.
+
+## 5c. The second Blacksite run (survey v2) [O]
+
+- **Demand vs supply**: 103 collections ask for 43 tags; every tag with targets has MORE targets than collections (e.g. `Zone1_TJunctionSmall` 7 collections / 49 targets, `Zone1_Spacer` 7 / 27, `Zone1_CornerSmall` 6 / 23), so targets are slots to choose from, used once. Two tags have collections and **no target** (`Zone1_LongI`, `Zone1_StealthObstacleArea2_Disabled`) and `Zone1_MediumIObstacle` has only movers.
+- **Sizes**: a target is the floor footprint of what it hosts: collection 32x28x32 / target 24x12x24, 20x28x20 / 12x12x12, 44x28x44 / 36x12x36 (8 studs more on x and z, 16 more in height): hence "floor on floor" in 7.5.
+- **Movers (179)**: 90 `Part` named `Link` (`Move = true`, `Open = true`, `Path`, `Location`) and 87 `Model`s (`Default` 50, `Model` 37) plus `SecurityCenter` and `Vent`, each with a `ShuffleTarget` tag; `Path` is a JSON-like table `{Placed, Node, Link}` (node positions and adjacency lists): **a Meadow-map fragment that must move with its collection**; `Location` (Sector2 42, Armory 2, Infirmary 2, SecurityCenter 2, ...) names a room. Their exact rule is the next unknown (M11.1b).
+- **Other attributes**: `ShuffleTargetRotation` 2 (x9) and 4 (x2); `OnProp` on 42 targets and 9 collections; `CollectionEnabled = "!ForceArea1FreeTraversal"` (a variable expression) on one; `RemovedVariable = "IntercomSegmentDisabled"`; `LockOutPlayers = "Mission_AlarmRaised"`.
+- **Props still not drawn (915 placeholders)**: 632 of them are the shuffle markers themselves (529 `ShuffleTarget`, 103 `PartCollection`) and most of the rest are logic markers (ItemSpawn 38, PathfindingBlocker 30, GuardCombatNode 24, Trigger* ..., cover points). The **visible** kinds without a model are few: CardboardBox 23, SurfaceText 9, MoveableProp 8, VerticalBlastDoor 6, DoorEmpty 4, HackableComputer 3.
 
 ## 6. Open (one question)
 
