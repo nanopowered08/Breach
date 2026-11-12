@@ -136,7 +136,7 @@ return Random
 end)()
 
 local Shuffle = {}
-Shuffle.VERSION = "0.3.0"
+Shuffle.VERSION = "0.3.1"
 
 local FOLDER_ATTRS = { "Condition", "PickCount", "PickSeed", "ShuffleContents", "ResolvePriority" }
 local VALUE_ATTRS = { "ShuffleTag", "Index", "MatchVariable", "ResolvePriority", "ShuffleTargetRotation", "Move", "Open", "Path", "Location", "Sound", "OnProp", "CollectionEnabled", "RemovedVariable", "InstantOpenDoorDetection", "LockOutPlayers" }
@@ -176,6 +176,17 @@ local function xyz(v)
 	return nil
 end
 
+-- The heading (rotation about Y) of a part from its EulerXYZ angles. The Y angle alone is wrong for a flipped part: Euler (180, 30, 180) is a
+-- heading of 150, not 30. R = Rx * Ry * Rz (CFrame.fromEulerAnglesXYZ); heading = atan2(-right.z, right.x).
+local function yawOf(e)
+	if type(e) ~= "table" then
+		return 0
+	end
+	local rx, ry, rz = e.X or 0, e.Y or 0, e.Z or 0
+	return math.atan2(math.cos(rx) * math.sin(ry) * math.cos(rz) - math.sin(rx) * math.sin(rz), math.cos(ry) * math.cos(rz))
+end
+Shuffle.yawOf = yawOf
+
 local function describe(node, kind)
 	local props = node.Props
 	local cf = props and props.CFrame
@@ -183,7 +194,7 @@ local function describe(node, kind)
 		Id = node.Id, Path = node.Path, Class = node.ClassName, Name = node.Name, Kind = kind,
 		Attrs = node.Attrs or {},
 		Position = xyz(cf and cf.Position), Size = xyz(props and props.Size),
-		Yaw = (cf and cf.EulerXYZ and type(cf.EulerXYZ.Y) == "number") and cf.EulerXYZ.Y or 0,
+		Yaw = yawOf(cf and cf.EulerXYZ),
 	}
 end
 
@@ -313,7 +324,7 @@ function Shuffle.survey(mission)
 	elseif s.Totals.Collections == 0 or s.Totals.Targets == 0 then
 		s.Warnings[#s.Warnings + 1] = ("PartCollection %d, ShuffleTarget %d: one side is missing, nothing can be moved"):format(s.Totals.Collections, s.Totals.Targets)
 	end
-	-- demand against supply, tag by tag (sorted, so the text is deterministic)
+	-- demand against supply, tag by tag (sorted, so the text is deterministic). Only COLLECTIONS need a target: movers ride along with a collection.
 	local names = {}
 	for tag in pairs(s.Tags) do
 		names[#names + 1] = tag
@@ -321,11 +332,12 @@ function Shuffle.survey(mission)
 	table.sort(names)
 	for _, tag in ipairs(names) do
 		local g = s.Tags[tag]
-		local asks = g.Collections + g.Movers
-		if asks > 0 and g.Targets == 0 then
-			s.Warnings[#s.Warnings + 1] = ("tag %s is asked for by %d but has no target"):format(tag, asks)
-		elseif asks > g.Targets then
-			s.Warnings[#s.Warnings + 1] = ("tag %s is asked for by %d but has only %d targets (are targets reused?)"):format(tag, asks, g.Targets)
+		if g.Collections > 0 and g.Targets == 0 then
+			s.Warnings[#s.Warnings + 1] = ("tag %s is asked for by %d collections but has no target"):format(tag, g.Collections)
+		elseif g.Collections > g.Targets then
+			s.Warnings[#s.Warnings + 1] = ("tag %s is asked for by %d collections but has only %d targets (are targets reused?)"):format(tag, g.Collections, g.Targets)
+		elseif g.Collections == 0 and g.Movers > 0 then
+			s.Warnings[#s.Warnings + 1] = ("tag %s has %d movers but no collection to move them with"):format(tag, g.Movers)
 		end
 	end
 	return s

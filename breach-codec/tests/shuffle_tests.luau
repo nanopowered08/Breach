@@ -40,7 +40,7 @@ return function(check)
 	check("shuffle: MatchVariable and ResolvePriority values are visible", s.Values.MatchVariable.WingB == 2 and s.Values.ResolvePriority["5"] == 2 and s.Values.ResolvePriority["1"] == 1)
 	check("shuffle: per tag counts", s.Tags.Wing.Collections == 2 and s.Tags.Wing.Targets == 3 and s.Tags.Lab.Collections == 2 and s.Tags.Lab.Targets == 1)
 	check("shuffle: per tag indexes", s.Tags.Wing.Indexes["2"] == 3 and s.Tags.Wing.Indexes["1"] == 2)
-	check("shuffle: demand against supply is checked per tag: Lab is asked for by 2 but has 1 target, Wing is fine", #s.Warnings == 1 and string.find(s.Warnings[1], "tag Lab is asked for by 2 but has only 1 targets", 1, true) ~= nil, s.Warnings[1])
+	check("shuffle: demand against supply is checked per tag: Lab is asked for by 2 but has 1 target, Wing is fine", #s.Warnings == 1 and string.find(s.Warnings[1], "tag Lab is asked for by 2 collections but has only 1 targets", 1, true) ~= nil, s.Warnings[1])
 
 	local lines = Shuffle.report(s)
 	local text = table.concat(lines, "\n")
@@ -164,11 +164,35 @@ return function(check)
 		check("layout: no mission: an empty layout, no crash", Shuffle.layout(nil, 1).Stats.Collections == 0)
 	end
 
+	-------------------------------------------------------------------------------- the yaw bug found in the first layout run, and movers
+	do
+		-- Euler (180, 30, 180) is a heading of 150 degrees, not 30 [found in the Blacksite: "turned 150 degrees", "30 degrees"]
+		check("yaw: a plain turn about Y is its Y angle", math.abs(Shuffle.yawOf({ X = 0, Y = 0.5, Z = 0 }) - 0.5) < 1e-9 and math.abs(Shuffle.yawOf({ X = 0, Y = math.pi / 2, Z = 0 }) - math.pi / 2) < 1e-9)
+		check("yaw: a flipped part (180, y, 180) has the heading 180 - y", math.abs(Shuffle.yawOf({ X = math.pi, Y = 0.5, Z = math.pi }) - (math.pi - 0.5)) < 1e-9 and math.abs(Shuffle.yawOf({ X = math.pi, Y = math.pi / 2, Z = math.pi }) - math.pi / 2) < 1e-9)
+		check("yaw: no angles is no heading", Shuffle.yawOf(nil) == 0 and Shuffle.yawOf({}) == 0)
+		local function flipped(name, attrs, x, y, z, sx, sy, sz, ex, ey, ez)
+			counter += 1
+			return { Id = "n" .. counter, Path = "M/" .. name .. counter, ClassName = "Part", Name = name, Attrs = attrs, Children = {},
+				Props = { CFrame = { Position = { X = x, Y = y, Z = z }, EulerXYZ = { X = ex, Y = ey, Z = ez } }, Size = { X = sx, Y = sy, Z = sz } } }
+		end
+		local lay = Shuffle.layout(mission({ flipped("PartCollection", { ShuffleTarget = "F" }, 0, 14, 0, 32, 28, 32, 0, 0, 0), flipped("ShuffleTarget", { ShuffleTag = "F" }, 50, 6, 50, 24, 12, 24, math.pi, 0.5, math.pi) }), 1)
+		check("yaw: a layout onto a flipped target turns by its real heading (150 degrees), not by the Y angle (30)", #lay.Placements == 1 and math.abs(lay.Placements[1].Yaw - (math.pi - 0.5)) < 1e-9, lay.Placements[1] and lay.Placements[1].Yaw)
+
+		-- movers ride along: they are not demand
+		local m = Shuffle.survey(mission({
+			node("Part", "PartCollection", { ShuffleTarget = "X" }), node("Part", "ShuffleTarget", { ShuffleTag = "X" }),
+			node("Model", "Default", { ShuffleTarget = "X" }), node("Model", "Default", { ShuffleTarget = "X" }), node("Model", "Default", { ShuffleTarget = "X" }),
+			node("Model", "Default", { ShuffleTarget = "Orphan" }), node("Model", "Default", { ShuffleTarget = "Orphan" }),
+		}))
+		check("movers: five movers on a tag with 1 collection and 1 target are no shortage", (function() for _, w in ipairs(m.Warnings) do if string.find(w, "tag X", 1, true) then return false end end return true end)())
+		check("movers: a tag with movers and no collection is said so, once", (function() local n = 0 for _, w in ipairs(m.Warnings) do if w == "tag Orphan has 2 movers but no collection to move them with" then n += 1 end end return n == 1 end)(), m.Warnings[1])
+	end
+
 	-- degenerate missions
 	local e = Shuffle.survey(mission({ node("Part", "WoodChair", {}) }))
 	check("shuffle: no shuffle in the mission: totals are zero and it says so", e.Totals.Collections == 0 and e.Totals.Targets == 0 and #e.Warnings == 1 and string.find(e.Warnings[1], "no physical shuffle", 1, true) ~= nil)
 	local one = Shuffle.survey(mission({ node("Part", "PartCollection", { ShuffleTag = "A" }) }))
-	check("shuffle: collections without targets are reported", #one.Warnings == 2 and string.find(one.Warnings[1], "one side is missing", 1, true) ~= nil and string.find(one.Warnings[2], "tag A is asked for by 1 but has no target", 1, true) ~= nil)
+	check("shuffle: collections without targets are reported", #one.Warnings == 2 and string.find(one.Warnings[1], "one side is missing", 1, true) ~= nil and string.find(one.Warnings[2], "tag A is asked for by 1 collections but has no target", 1, true) ~= nil)
 	local none = Shuffle.survey(nil)
 	check("shuffle: no mission: no crash, one warning", none.Totals.Collections == 0 and #none.Warnings == 1)
 	check("shuffle: the report works on an empty survey", #Shuffle.report(none) >= 1)
