@@ -1,0 +1,37 @@
+name: Open Cloud map-load smoke test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: breach-open-cloud-smoke-\${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  map-load:
+    name: Load and render mission in Open Cloud
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out selected commit
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Verify loader manifest
+        run: python tools/make_manifest.py --check
+
+      - name: Run Open Cloud smoke test
+        env:
+          ROBLOX_API_KEY: \${{ secrets.ROBLOX_API_KEY }}
+          ROBLOX_UNIVERSE_ID: \${{ secrets.ROBLOX_UNIVERSE_ID }}
+          ROBLOX_PLACE_ID: \${{ secrets.ROBLOX_PLACE_ID }}
+          MISSION_GIST_URL: \${{ vars.MISSION_GIST_URL }}
+          GITHUB_SHA: \${{ github.sha }}
+        run: python tools/open_cloud_smoke.py
