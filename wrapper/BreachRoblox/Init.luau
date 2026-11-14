@@ -95,7 +95,7 @@ function Adapter.start(Breach, options)
 	end
 	print(("[Breach] seed %d (%s)"):format(seed, seedSource))
 	workspace:SetAttribute("BreachSeedInUse", seed)
-	local session, info = Core.loadMission(M, code, { seed = seed, difficulty = options.Difficulty, twoPhase = options.TwoPhase == true })
+	local session, info = Core.loadMission(M, code, { seed = seed, difficulty = options.Difficulty, twoPhase = options.TwoPhase == true, applyLayout = options.ApplyLayout ~= false })
 	if not session then
 		warn("[Breach] could not load the mission: " .. tostring(info))
 		return nil, info
@@ -110,12 +110,27 @@ function Adapter.start(Breach, options)
 		else
 			print("[Breach] shuffle survey failed: " .. tostring(lines))
 		end
-		-- M11.1a: which target each PartCollection would go to for this seed (decided and printed only: nothing is moved yet)
-		local okL, layoutLines = pcall(function() return M.Shuffle.layoutReport(M.Shuffle.layout(info.Mission, seed), 30) end)
-		if okL then
-			for _, line in ipairs(layoutLines) do print("[Breach] " .. line) end
-		else
-			print("[Breach] layout failed: " .. tostring(layoutLines))
+	end
+	do
+		-- M11.1a/b: which target each PartCollection went to for this seed, and what moved with it. The layout was applied before the world was built
+		-- (ApplyLayout = false keeps the staging layout and only prints what the layout would be).
+		local layout = info.Layout
+		if layout == nil and M.Shuffle.layout and options.ShuffleSurvey ~= false then
+			local okD, l = pcall(M.Shuffle.layout, info.Mission, seed)
+			layout = okD and l or nil
+		end
+		if layout then
+			local okL, layoutLines = pcall(M.Shuffle.layoutReport, layout, 30)
+			if okL then
+				for _, line in ipairs(layoutLines) do print("[Breach] " .. line) end
+			else
+				print("[Breach] layout failed: " .. tostring(layoutLines))
+			end
+		end
+		if info.LayoutStats then
+			print(("[Breach] layout applied: %d nodes moved with %d collections, %d nav points"):format(info.LayoutStats.Nodes, info.LayoutStats.Collections, info.LayoutStats.NavPoints))
+		elseif info.LayoutError then
+			warn("[Breach] layout not applied, the mission runs unshuffled: " .. tostring(info.LayoutError))
 		end
 	end
 
