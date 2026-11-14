@@ -206,4 +206,87 @@ return function(check)
 	local keys = 0
 	for _ in pairs(m.Values.ShuffleTag) do keys += 1 end
 	check("shuffle: distinct values are capped (60 kept + '(others)')", keys == 61 and m.Values.ShuffleTag["(others)"] == 30, keys)
+
+	-------------------------------------------------------------------------------- M11.1b: Shuffle.apply
+	do
+		local Geometry = require("../BreachWorld").Geometry
+		local function near(a, b) return math.abs(a - b) < 1e-6 end
+		local function angDiff(a, b) local d = (a - b) % (2 * math.pi) return math.min(d, 2 * math.pi - d) end
+
+		-- turning an Euler rotation by a yaw is the same as turning the rotated vector about Y
+		local worst = 0
+		for _, e in ipairs({ { 0, 0, 0 }, { 0, 0.7, 0 }, { math.pi, 0.5, math.pi }, { 0.3, -0.4, 1.1 }, { 1.2, 0.2, -2.5 }, { 0, math.pi / 2, 0 } }) do
+			for _, yaw in ipairs({ 0.4, math.pi / 2, math.pi, -2.2 }) do
+				local rx, ry, rz = Shuffle.turnedEuler({ X = e[1], Y = e[2], Z = e[3] }, yaw)
+				local nx, ny, nz = Geometry.rotate({ X = rx, Y = ry, Z = rz }, 1, 2, 3)
+				local ox, oy, oz = Geometry.rotate({ X = e[1], Y = e[2], Z = e[3] }, 1, 2, 3)
+				local c, s = math.cos(yaw), math.sin(yaw)
+				local ex, ey, ez = ox * c + oz * s, oy, -ox * s + oz * c
+				worst = math.max(worst, math.abs(nx - ex), math.abs(ny - ey), math.abs(nz - ez))
+			end
+		end
+		check("apply: turnedEuler equals a yaw about Y applied after the old rotation (24 cases)", worst < 1e-9, worst)
+
+		local function build()
+			local id = 0
+			local function n(class, name, attrs, x, y, z, sx, sy, sz, eul)
+				id += 1
+				local node = { Id = "a" .. id, Path = "M/" .. name .. id, ClassName = class, Name = name, Attrs = attrs or {}, Children = {}, Props = {} }
+				if x then
+					node.Props.CFrame = { Position = { X = x, Y = y, Z = z }, EulerXYZ = eul or { X = 0, Y = 0, Z = 0 } }
+					node.Props.Size = { X = sx or 4, Y = sy or 4, Z = sz or 4 }
+				end
+				return node
+			end
+			local list = {
+				n("Part", "PartCollection", { ShuffleTarget = "A" }, 100, 14, 0, 20, 28, 20),
+				n("Part", "ShuffleTarget", { ShuffleTag = "A" }, 0, 6, 0, 12, 12, 12, { X = 0, Y = math.pi / 2, Z = 0 }),
+				n("Part", "WoodChair", {}, 105, 3, 2, 2, 2, 2, { X = 0, Y = 0.5, Z = 0 }), -- inside the collection
+				n("Part", "FarChair", {}, 500, 3, 0, 2, 2, 2), -- outside every collection
+				n("Model", "Cell", { Path = '{"Node":[[100,1,0],[104,1,3]],"Link":[[2],[1]],"Placed":[[98,1,-2]]}' }), -- a Meadow map inside the collection
+				n("Model", "FarCell", { Path = '{"Node":[[500,1,0]],"Link":[[]]}' }),
+				n("Part", "PartCollection", { ShuffleTarget = "B" }, 300, 14, 0, 20, 28, 20), -- asks for a tag with no target: stays
+				n("Part", "StayChair", {}, 302, 3, 0, 2, 2, 2),
+			}
+			return { Nodes = list }, list
+		end
+
+		local m, list = build()
+		local layout = Shuffle.layout(m, 5)
+		local p = layout.Placements[1]
+		local st = Shuffle.apply(m, layout)
+		check("apply: one collection is placed, stats count what moved", #layout.Placements == 1 and st.Collections == 1 and st.Nodes == 2 and st.NavPoints == 3, st.Nodes)
+		local chair = list[3].Props.CFrame
+		local ex, ey, ez = Shuffle.moved(p, 105, 3, 2)
+		check("apply: a prop inside the collection moves with it (same transform as Shuffle.moved)", near(chair.Position.X, ex) and near(chair.Position.Y, ey) and near(chair.Position.Z, ez))
+		check("apply: the collection lands floor on floor over the target", near(list[1].Props.CFrame.Position.X, 0) and near(list[1].Props.CFrame.Position.Z, 0) and near(list[1].Props.CFrame.Position.Y - 14, p.To.Y - 14) and near(p.To.Y - 14, 0), list[1].Props.CFrame.Position.Y)
+		check("apply: its rotation is turned by the placement's yaw", angDiff(Shuffle.yawOf(chair.EulerXYZ), Shuffle.yawOf({ X = 0, Y = 0.5, Z = 0 }) + p.Yaw) < 1e-6)
+		check("apply: the distance from the collection centre is kept (rigid)", near(math.sqrt((chair.Position.X - list[1].Props.CFrame.Position.X) ^ 2 + (chair.Position.Z - list[1].Props.CFrame.Position.Z) ^ 2), math.sqrt(5 ^ 2 + 2 ^ 2)))
+		check("apply: the target, a prop outside, and an unplaced collection's contents do not move", list[2].Props.CFrame.Position.X == 0 and list[4].Props.CFrame.Position.X == 500 and list[8].Props.CFrame.Position.X == 302 and list[7].Props.CFrame.Position.X == 300)
+		-- the Meadow map
+		local text = list[5].Attrs.Path
+		local x1, y1, z1 = Shuffle.moved(p, 100, 1, 0)
+		local x2 = Shuffle.moved(p, 98, 1, -2)
+		check("apply: a nav Path inside the collection is moved point by point, links untouched", string.find(text, '"Link":[[2],[1]]', 1, true) ~= nil and string.find(text, tostring(x1):sub(1, 6), 1, true) ~= nil and list[5].Attrs.Path ~= '{"Node":[[100,1,0],[104,1,3]],"Link":[[2],[1]],"Placed":[[98,1,-2]]}', text)
+		check("apply: a nav Path outside every collection is left as it was", list[6].Attrs.Path == '{"Node":[[500,1,0]],"Link":[[]]}')
+		-- twice = once
+		local before = chair.Position.X
+		local again = Shuffle.apply(m, layout)
+		check("apply: a second apply does nothing", again.Nodes == 0 and chair.Position.X == before)
+		-- determinism
+		local m2, list2 = build()
+		Shuffle.apply(m2, Shuffle.layout(m2, 5))
+		check("apply: the same seed gives the same moved positions", list2[3].Props.CFrame.Position.X == chair.Position.X and list2[3].Props.CFrame.Position.Z == chair.Position.Z and list2[5].Attrs.Path == list[5].Attrs.Path)
+		-- degenerate input
+		check("apply: no mission or no placements is harmless", Shuffle.apply(nil, layout).Nodes == 0 and Shuffle.apply({ Nodes = {} }, { Placements = {} }).Nodes == 0)
+		-- a node that is itself a placed collection uses its own placement even if its centre lies in another collection
+		local mm = { Nodes = {
+			{ Id = "x1", Path = "M/c1", ClassName = "Part", Name = "PartCollection", Attrs = { ShuffleTarget = "T" }, Children = {}, Props = { CFrame = { Position = { X = 0, Y = 0, Z = 0 } }, Size = { X = 40, Y = 40, Z = 40 } } },
+			{ Id = "x2", Path = "M/c2", ClassName = "Part", Name = "PartCollection", Attrs = { ShuffleTarget = "U" }, Children = {}, Props = { CFrame = { Position = { X = 5, Y = 0, Z = 0 } }, Size = { X = 10, Y = 10, Z = 10 } } },
+			{ Id = "x3", Path = "M/t1", ClassName = "Part", Name = "ShuffleTarget", Attrs = { ShuffleTag = "T" }, Children = {}, Props = { CFrame = { Position = { X = 1000, Y = 0, Z = 0 } }, Size = { X = 40, Y = 40, Z = 40 } } },
+			{ Id = "x4", Path = "M/t2", ClassName = "Part", Name = "ShuffleTarget", Attrs = { ShuffleTag = "U" }, Children = {}, Props = { CFrame = { Position = { X = -1000, Y = 0, Z = 0 } }, Size = { X = 10, Y = 10, Z = 10 } } },
+		} }
+		Shuffle.apply(mm, Shuffle.layout(mm, 1))
+		check("apply: an overlapping collection keeps its own target", mm.Nodes[1].Props.CFrame.Position.X == 1000 and mm.Nodes[2].Props.CFrame.Position.X == -1000, mm.Nodes[2].Props.CFrame.Position.X)
+	end
 end

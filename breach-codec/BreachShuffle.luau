@@ -20,7 +20,7 @@
 	the tags (`ShuffleTag`) live on the targets, `MatchVariable` is empty on every target and `ResolvePriority` is 2 everywhere.
 	    Shuffle.report(survey, maxLines)            -- the survey as lines of text (the adapter prints it)
 
-	M11.1a, the LAYOUT: which target each PartCollection goes to. Still decides only: nothing is moved yet (M11.1b applies it).
+	M11.1a, the LAYOUT: which target each PartCollection goes to. It only decides; M11.1b (Shuffle.apply, below) moves things.
 
 	    local layout = Shuffle.layout(mission, seed)
 	    layout.Placements   list of {Collection, Path, Tag, Target, TargetPath, Index, Steps, Yaw, From, To}  From/To = the collection's centre before and after
@@ -135,8 +135,272 @@ end
 return Random
 end)()
 
+local sub, find, match, concat = string.sub, string.find, string.match, table.concat
+local char = string.char
+local function fail(msg)
+	error("BreachShuffle: " .. msg, 0)
+end
+
+-- >>> shared JSON (spliced by tools/build.py) <<<
+-------------------------------------------------------------------------------
+local function jsonDecode(text)
+	local pos, n = 1, #text
+
+	local function skip()
+		pos = find(text, "[^ \t\r\n]", pos) or (n + 1)
+	end
+	local function jfail(msg)
+		fail("JSON: " .. msg .. " at " .. pos)
+	end
+
+	local parseValue
+
+	local function utf8Encode(cp)
+		if cp < 0x80 then
+			return char(cp)
+		elseif cp < 0x800 then
+			return char(0xC0 + cp // 64, 0x80 + cp % 64)
+		elseif cp < 0x10000 then
+			return char(0xE0 + cp // 4096, 0x80 + (cp // 64) % 64, 0x80 + cp % 64)
+		end
+		return char(0xF0 + cp // 262144, 0x80 + (cp // 4096) % 64, 0x80 + (cp // 64) % 64, 0x80 + cp % 64)
+	end
+
+	local SIMPLE = { ['"'] = '"', ["\\"] = "\\", ["/"] = "/", b = "\b", f = "\f", n = "\n", r = "\r", t = "\t" }
+
+	local function parseString()
+		pos = pos + 1 -- opening quote
+		local parts = {}
+		while true do
+			local s, e = find(text, '["\\]', pos)
+			if not s then
+				jfail("unterminated string")
+			end
+			if s > pos then
+				parts[#parts + 1] = sub(text, pos, s - 1)
+			end
+			if sub(text, s, s) == '"' then
+				pos = e + 1
+				return concat(parts)
+			end
+			local esc = sub(text, s + 1, s + 1)
+			if esc == "u" then
+				local hex = match(text, "^%x%x%x%x", s + 2)
+				if not hex then
+					jfail("bad \\u escape")
+				end
+				local cp = tonumber(hex, 16)
+				pos = s + 6
+				if cp >= 0xD800 and cp <= 0xDBFF then
+					local lo = match(text, "^\\u(%x%x%x%x)", pos)
+					if lo then
+						local l = tonumber(lo, 16)
+						if l >= 0xDC00 and l <= 0xDFFF then
+							cp = 0x10000 + (cp - 0xD800) * 1024 + (l - 0xDC00)
+							pos = pos + 6
+						end
+					end
+				end
+				parts[#parts + 1] = utf8Encode(cp)
+			else
+				local rep = SIMPLE[esc]
+				if rep == nil then
+					jfail("bad escape \\" .. esc)
+				end
+				parts[#parts + 1] = rep
+				pos = s + 2
+			end
+		end
+	end
+
+	local function parseNumber()
+		local s, e = find(text, "^-?%d+%.?%d*[eE]?[+-]?%d*", pos)
+		if not s then
+			jfail("bad number")
+		end
+		local v = tonumber(sub(text, s, e))
+		if v == nil then
+			jfail("bad number")
+		end
+		pos = e + 1
+		return v
+	end
+
+	local function parseObject(depth)
+		pos = pos + 1
+		local obj = {}
+		skip()
+		if sub(text, pos, pos) == "}" then
+			pos = pos + 1
+			return obj
+		end
+		while true do
+			skip()
+			if sub(text, pos, pos) ~= '"' then
+				jfail("expected object key")
+			end
+			local key = parseString()
+			skip()
+			if sub(text, pos, pos) ~= ":" then
+				jfail("expected ':'")
+			end
+			pos = pos + 1
+			obj[key] = parseValue(depth + 1)
+			skip()
+			local c = sub(text, pos, pos)
+			pos = pos + 1
+			if c == "}" then
+				return obj
+			elseif c ~= "," then
+				jfail("expected ',' or '}'")
+			end
+		end
+	end
+
+	local function parseArray(depth)
+		pos = pos + 1
+		local arr, k = {}, 0
+		skip()
+		if sub(text, pos, pos) == "]" then
+			pos = pos + 1
+			return arr
+		end
+		while true do
+			k = k + 1
+			arr[k] = parseValue(depth + 1) -- a null leaves a hole, as in most embedders
+			skip()
+			local c = sub(text, pos, pos)
+			pos = pos + 1
+			if c == "]" then
+				return arr
+			elseif c ~= "," then
+				jfail("expected ',' or ']'")
+			end
+		end
+	end
+
+	function parseValue(depth)
+		if depth > 200 then
+			jfail("nesting too deep")
+		end
+		skip()
+		local c = sub(text, pos, pos)
+		if c == "{" then
+			return parseObject(depth)
+		elseif c == "[" then
+			return parseArray(depth)
+		elseif c == '"' then
+			return parseString()
+		elseif c == "t" and sub(text, pos, pos + 3) == "true" then
+			pos = pos + 4
+			return true
+		elseif c == "f" and sub(text, pos, pos + 4) == "false" then
+			pos = pos + 5
+			return false
+		elseif c == "n" and sub(text, pos, pos + 3) == "null" then
+			pos = pos + 4
+			return nil
+		elseif c == "-" or find(c, "^%d") then
+			return parseNumber()
+		end
+		jfail("unexpected character '" .. c .. "'")
+		return nil
+	end
+
+	local v = parseValue(0)
+	skip()
+	if pos <= n then
+		jfail("trailing data")
+	end
+	return v
+end
+
+
+-- Deterministic JSON encoder: object keys sorted, numbers round-trip exactly (%.17g), arrays = 1..n sequences.
+local function jsonEncode(value)
+	local parts, n = {}, 0
+	local function put(x)
+		n = n + 1
+		parts[n] = x
+	end
+	local ESCAPES = { ['"'] = '\\"', ["\\"] = "\\\\", ["\n"] = "\\n", ["\r"] = "\\r", ["\t"] = "\\t", ["\b"] = "\\b", ["\f"] = "\\f" }
+	local function encString(str)
+		put('"')
+		put((string.gsub(str, '[%c"\\]', function(c)
+			return ESCAPES[c] or string.format("\\u%04x", string.byte(c))
+		end)))
+		put('"')
+	end
+	local function enc(v, depth)
+		if depth > 200 then
+			fail("JSON encode: nesting too deep")
+		end
+		local t = type(v)
+		if t == "string" then
+			encString(v)
+		elseif t == "number" then
+			if v ~= v or v == math.huge or v == -math.huge then
+				fail("JSON encode: cannot encode NaN or infinity")
+			end
+			if v == math.floor(v) and math.abs(v) < 2 ^ 53 then
+				put(string.format("%d", v))
+			else
+				put(string.format("%.17g", v))
+			end
+		elseif t == "boolean" then
+			put(v and "true" or "false")
+		elseif t == "table" then
+			local len = #v
+			local isArray = len > 0 or next(v) == nil
+			if isArray then
+				for k in pairs(v) do
+					if type(k) ~= "number" or k < 1 or k > len or k ~= math.floor(k) then
+						isArray = false
+						break
+					end
+				end
+			end
+			if isArray then
+				put("[")
+				for i = 1, len do
+					if i > 1 then
+						put(",")
+					end
+					enc(v[i], depth + 1)
+				end
+				put("]")
+			else
+				local keys = {}
+				for k in pairs(v) do
+					if type(k) ~= "string" then
+						fail("JSON encode: object keys must be strings")
+					end
+					keys[#keys + 1] = k
+				end
+				table.sort(keys)
+				put("{")
+				for i, k in ipairs(keys) do
+					if i > 1 then
+						put(",")
+					end
+					encString(k)
+					put(":")
+					enc(v[k], depth + 1)
+				end
+				put("}")
+			end
+		else
+			fail("JSON encode: unsupported value type " .. t)
+		end
+	end
+	enc(value, 0)
+	return concat(parts)
+end
+
+-- <<< END shared JSON <<<
+
 local Shuffle = {}
-Shuffle.VERSION = "0.3.1"
+Shuffle.VERSION = "0.4.0"
 
 local FOLDER_ATTRS = { "Condition", "PickCount", "PickSeed", "ShuffleContents", "ResolvePriority" }
 local VALUE_ATTRS = { "ShuffleTag", "Index", "MatchVariable", "ResolvePriority", "ShuffleTargetRotation", "Move", "Open", "Path", "Location", "Sound", "OnProp", "CollectionEnabled", "RemovedVariable", "InstantOpenDoorDetection", "LockOutPlayers" }
@@ -521,6 +785,137 @@ function Shuffle.inside(collection, x, y, z)
 	local c, s = math.cos(-yaw), math.sin(-yaw)
 	local lx, lz = dx * c + dz * s, -dx * s + dz * c
 	return math.abs(lx) <= collection.Size.X / 2 and math.abs(y - collection.Position.Y) <= collection.Size.Y / 2 and math.abs(lz) <= collection.Size.Z / 2
+end
+
+---------------------------------------------------------------------------------------------------------- M11.1b: applying the layout
+-- Turn an EulerXYZ rotation (R = Rx * Ry * Rz, Roblox's ToEulerAnglesXYZ convention) by `yaw` about the world Y axis: R' = Ry(yaw) * R.
+-- Returns the new rx, ry, rz.
+local function turnedEuler(e, yaw)
+	local rx, ry, rz = 0, 0, 0
+	if type(e) == "table" then
+		rx, ry, rz = e.X or 0, e.Y or 0, e.Z or 0
+	end
+	if yaw == 0 then
+		return rx, ry, rz
+	end
+	local cx, sx, cy, sy, cz, sz = math.cos(rx), math.sin(rx), math.cos(ry), math.sin(ry), math.cos(rz), math.sin(rz)
+	local r11, r12, r13 = cy * cz, -cy * sz, sy
+	local r22, r23 = cx * cz - sx * sy * sz, -sx * cy
+	local r31, r32, r33 = sx * sz - cx * sy * cz, sx * cz + cx * sy * sz, cx * cy
+	local c, s = math.cos(yaw), math.sin(yaw)
+	local n11, n12, n13 = c * r11 + s * r31, c * r12 + s * r32, c * r13 + s * r33
+	local n32, n33 = -s * r12 + c * r32, -s * r13 + c * r33
+	local ny = math.asin(math.max(-1, math.min(1, n13)))
+	if math.abs(n13) < 0.999999 then
+		return math.atan2(-r23, n33), ny, math.atan2(-n12, n11)
+	end
+	return math.atan2(n32, r22), ny, 0 -- gimbal lock: all of the turn goes into rx
+end
+
+Shuffle.turnedEuler = turnedEuler
+
+-- Apply a layout to the mission, IN PLACE, once, before anything reads positions (BreachWorld.build, props, bots, logic markers).
+-- Rule [P]: every node whose CENTRE lies inside a placed collection's volume (original position) moves rigidly with that collection:
+-- its position goes through Shuffle.moved and its rotation is turned by the placement's Yaw. A collection uses its own placement even if its
+-- centre lies in another collection. ShuffleTarget markers stay where they are. A string attribute `Path` that holds a navigation table
+-- (`Node`/`Placed` point lists, the Meadow map of a cell or of a mover) is moved too: with its own node's placement when the node has a position
+-- inside a collection, else point by point. Returns { Nodes = moved nodes, NavPoints = moved nav points, Collections = placed collections }.
+function Shuffle.apply(mission, layout)
+	local stats = { Nodes = 0, NavPoints = 0, Collections = 0 }
+	if type(mission) ~= "table" or type(mission.Nodes) ~= "table" or type(layout) ~= "table" or #layout.Placements == 0 then
+		return stats
+	end
+	if mission.ShuffleLayout ~= nil then
+		return stats -- never twice: a second pass would move everything again
+	end
+	mission.ShuffleLayout = layout
+	local survey = Shuffle.survey(mission)
+	local byId = {}
+	for _, c in ipairs(survey.Collections) do
+		byId[c.Id] = c
+	end
+	local zones, own, isTarget = {}, {}, {}
+	for _, t in ipairs(survey.Targets) do
+		isTarget[t.Id] = true
+	end
+	for _, p in ipairs(layout.Placements) do
+		local c = byId[p.Collection]
+		if c and c.Position and c.Size then
+			local zone = { C = c, P = p }
+			zones[#zones + 1] = zone
+			own[c.Id] = zone
+			stats.Collections += 1
+		end
+	end
+	local function zoneAt(x, y, z)
+		for _, zone in ipairs(zones) do
+			if Shuffle.inside(zone.C, x, y, z) then
+				return zone
+			end
+		end
+		return nil
+	end
+	local function movePoint(zone, pt)
+		if type(pt) == "table" and type(pt[1]) == "number" and type(pt[2]) == "number" and type(pt[3]) == "number" then
+			pt[1], pt[2], pt[3] = Shuffle.moved(zone.P, pt[1], pt[2], pt[3])
+			stats.NavPoints += 1
+		end
+	end
+	-- decide first (original positions), then mutate: nothing is moved twice, and the order of nodes does not matter
+	local jobs = {}
+	for _, node in ipairs(mission.Nodes) do
+		if not isTarget[node.Id] then
+			local props = node.Props
+			local cf = props and props.CFrame
+			local pos = type(cf) == "table" and cf.Position
+			local zone = own[node.Id]
+			if not zone and type(pos) == "table" and type(pos.X) == "number" then
+				zone = zoneAt(pos.X, pos.Y or 0, pos.Z or 0)
+			end
+			local raw = node.Attrs and node.Attrs.Path
+			local nav
+			if type(raw) == "string" and string.sub(raw, 1, 1) == "{" then
+				local ok, data = pcall(jsonDecode, raw)
+				if ok and type(data) == "table" and (type(data.Node) == "table" or type(data.Placed) == "table") then
+					nav = data
+				end
+			end
+			if zone or nav then
+				jobs[#jobs + 1] = { node = node, zone = zone, nav = nav }
+			end
+		end
+	end
+	for _, job in ipairs(jobs) do
+		local node, zone = job.node, job.zone
+		if zone then
+			local cf = node.Props.CFrame
+			local pos = cf.Position
+			pos.X, pos.Y, pos.Z = Shuffle.moved(zone.P, pos.X, pos.Y or 0, pos.Z or 0)
+			if zone.P.Yaw ~= 0 then
+				local rx, ry, rz = turnedEuler(cf.EulerXYZ, zone.P.Yaw)
+				cf.EulerXYZ = { X = rx, Y = ry, Z = rz }
+			end
+			stats.Nodes += 1
+		end
+		if job.nav then
+			local before = stats.NavPoints
+			for _, key in ipairs({ "Node", "Placed" }) do
+				for _, pt in ipairs(job.nav[key] or {}) do
+					local z = zone
+					if not z and type(pt) == "table" and type(pt[1]) == "number" then
+						z = zoneAt(pt[1], pt[2] or 0, pt[3] or 0)
+					end
+					if z then
+						movePoint(z, pt)
+					end
+				end
+			end
+			if stats.NavPoints > before then -- re-written only when something moved: other attributes keep their exact text
+				node.Attrs.Path = jsonEncode(job.nav)
+			end
+		end
+	end
+	return stats
 end
 
 function Shuffle.layoutReport(layout, maxLines)

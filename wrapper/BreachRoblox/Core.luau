@@ -73,6 +73,18 @@ function Core.loadMission(M, code, opts)
 	if not mission then return nil, err end
 	local setup, setupErr = M.Setup.parse(decoded.SetupSource or "")
 	if not setup then return nil, "setup: " .. tostring(setupErr) end
+	-- M11.1b: the physical layout. Decided from the seed and applied to the mission's nodes BEFORE the world is built, so geometry, Meadow maps,
+	-- props, bots and markers all see the shuffled positions. A failure here never stops the load: the mission runs unshuffled and says why.
+	local layout, layoutStats, layoutError
+	if opts.applyLayout ~= false and M.Shuffle and M.Shuffle.layout and M.Shuffle.apply then
+		local okL, l = pcall(M.Shuffle.layout, mission, opts.seed or Core.Defaults.seed)
+		if okL then
+			local okA, st = pcall(M.Shuffle.apply, mission, l)
+			if okA then layout, layoutStats = l, st else layoutError = "apply: " .. tostring(st) end
+		else
+			layoutError = "layout: " .. tostring(l)
+		end
+	end
 	local world
 	world, err = stage("world", M.World.build, mission)
 	if not world then return nil, err end
@@ -82,7 +94,7 @@ function Core.loadMission(M, code, opts)
 		twoPhase = opts.twoPhase, combatParams = opts.combatParams,
 	})
 	if not session then return nil, "session: " .. tostring(why) end
-	return session, { Mission = mission, Setup = setup, World = world, MapId = decoded.MapId, Decoded = decoded }
+	return session, { Mission = mission, Setup = setup, World = world, MapId = decoded.MapId, Decoded = decoded, Layout = layout, LayoutStats = layoutStats, LayoutError = layoutError }
 end
 
 ---------------------------------------------------------------------------------------------------------- props and doors

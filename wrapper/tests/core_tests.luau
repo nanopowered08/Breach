@@ -189,6 +189,28 @@ return function(check)
 		local badSession = setmetatable({ Session = { new = function() return nil, "no nodes" end } }, { __index = M })
 		local _, e6 = Core.loadMission(badSession, "X")
 		check("load: a session error", e6 == "session: no nodes", e6)
+
+		-- M11.1b: the layout is decided from the seed and applied BEFORE the world is built; it never stops a load
+		local order = {}
+		local MS = setmetatable({
+			Shuffle = {
+				layout = function(mis, seed) order[#order + 1] = "layout:" .. tostring(seed) return { Seed = seed, Placements = {} } end,
+				apply = function(mis, l) order[#order + 1] = "apply" return { Nodes = 3, Collections = 1, NavPoints = 2 } end,
+			},
+			World = { build = function(m) order[#order + 1] = "world" return { world = true } end },
+		}, { __index = M })
+		local _, infoS = Core.loadMission(MS, "CODE", { seed = 9 })
+		check("load: layout and apply run before the world, with the seed", order[1] == "layout:9" and order[2] == "apply" and order[3] == "world", table.concat(order, ","))
+		check("load: info carries the layout and what moved", infoS.Layout and infoS.Layout.Seed == 9 and infoS.LayoutStats.Nodes == 3 and infoS.LayoutError == nil)
+		order = {}
+		local _, infoOff = Core.loadMission(MS, "CODE", { seed = 9, applyLayout = false })
+		check("load: applyLayout = false keeps the staging layout", #order == 1 and order[1] == "world" and infoOff.Layout == nil)
+		local MB = setmetatable({ Shuffle = { layout = function() error("boom") end, apply = function() end } }, { __index = M })
+		local sB, infoB = Core.loadMission(MB, "CODE", {})
+		check("load: a failing layout does not stop the load and is reported", sB and sB.session and infoB.Layout == nil and infoB.LayoutError and infoB.LayoutError:find("^layout: ") ~= nil and infoB.LayoutError:find("boom") ~= nil, infoB.LayoutError)
+		local MA = setmetatable({ Shuffle = { layout = function() return { Placements = {} } end, apply = function() error("half way") end } }, { __index = M })
+		local sA, infoA = Core.loadMission(MA, "CODE", {})
+		check("load: a failing apply is reported too", sA and infoA.LayoutError and infoA.LayoutError:find("^apply: ") ~= nil, infoA.LayoutError)
 	end
 
 	-------------------------------------------------------------------------------- props and doors
