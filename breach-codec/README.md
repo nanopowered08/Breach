@@ -26,6 +26,7 @@ BreachHostage.luau     hostages (aim, follow, flee timer, loud freeze), bodies, 
 BreachBehavior.luau    CustomBehavior scripts + conditions, AlarmedBehaviorOverride, RandomBotSpawner (M8e)   (BUILT; standalone)
 BreachCombatData.luau  combat data model: spawners, pools, spawn parts, class table, concealed weapons (M9.0)   (BUILT; standalone)
 BreachCombat.luau      lockdown phases (Searching / Attacking), weapon seen, what guards know, noise (M9a; opt-in)   (BUILT; standalone)
+BreachEncode.luau      mission-code encoder, the mirror of BreachCodec (M12: tree -> pieces; stored Zstd + Base64; `luau tests/encode.luau`)
 BreachShuffle.luau     layout randomisation: M11.0 survey of PartCollection / ShuffleTarget / folder-level options (BUILT; standalone)
 BreachSession.luau     wires all layers: step order, combined event log, signature (M8f)   (BUILT; standalone)
 src/body.luau         hand-written source of BreachCodec.luau

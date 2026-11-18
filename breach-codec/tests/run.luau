@@ -616,6 +616,9 @@ require("./combat_tests")(check)
 -- M11.0: shuffle survey
 require("./shuffle_tests")(check)
 
+-- M12: mission-code encoder
+require("./encode_tests")(check)
+
 -- M8f: seeded playthroughs through BreachSession
 require("./playthrough_tests")(check)
 
