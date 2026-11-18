@@ -204,6 +204,123 @@ return function(check)
 	local _, winfo = Encode.encode({ ClassName = "Texture", Name = "t", Props = {}, Attrs = { a = 1 }, Children = {} })
 	check("attributes on a class that cannot carry them are reported", winfo ~= nil and #winfo.Warnings == 1)
 
+	-- 6b) a seeded stress test: random trees of every class, random values of every type, random attributes. Each must round trip and be a fixed point.
+	do
+		local seed = 987654321
+		local function rnd() seed = (seed * 1103515245 + 12345) % 2147483648 return seed / 2147483648 end
+		local function ri(a, b) return a + math.floor(rnd() * (b - a + 1)) end
+		local function pick(t) return t[ri(1, #t)] end
+		local ENUMS_FUZZ = {
+			Material = { "Asphalt", "Concrete", "Neon", "Plaster", "Rubber", "SmoothPlastic", "WoodPlanks" }, NormalId = { "Top", "Bottom", "Left", "Right", "Front", "Back" },
+			PartType = { "Ball", "Cylinder", "Block", "Wedge", "CornerWedge" }, MeshType = { "Brick", "FileMesh", "Head", "Wedge" }, RenderFidelity = { "Automatic", "Precise", "Performance" },
+			CollisionFidelity = { "Default", "Hull", "Box", "PreciseConvexDecomposition" }, TextureMode = { "Stretch", "Wrap", "Static" },
+			ParticleEmitterShape = { "Box", "Sphere", "Cylinder", "Disc" }, ParticleEmitterShapeInOut = { "Outward", "Inward", "InAndOut" },
+			ParticleEmitterShapeStyle = { "Volume", "Surface" }, ParticleOrientation = { "FacingCamera", "VelocityParallel", "VelocityPerpendicular" },
+			ResamplerMode = { "Default", "Pixelated" }, SurfaceGuiSizingMode = { "FixedSize", "PixelsPerStud" },
+		}
+		local function rfloat()
+			local k = ri(1, 6)
+			if k == 1 then return 0 elseif k == 2 then return ri(-1000, 1000) elseif k == 3 then return (rnd() - 0.5) * 360000 elseif k == 4 then return (rnd() - 0.5) * 2 else return (rnd() - 0.5) * 2000 end
+		end
+		local function rstr()
+			local t = {}
+			for i = 1, ri(0, 24) do
+				t[i] = pick({ "a", "Z", " ", "&", "\n", "\t", "\r", "9", "_", "\195\169", "\226\130\172", "!", "\"", "{", "|" })
+			end
+			return table.concat(t)
+		end
+		local function rcolor() return { R = rnd(), G = rnd(), B = rnd() } end
+		local function rangle()
+			local k = ri(1, 8)
+			if k == 1 then return math.pi elseif k == 2 then return -math.pi elseif k == 3 then return 0 else return (rnd() * 2 - 1) * math.pi end
+		end
+		local function rvec3() return { X = rfloat(), Y = rfloat(), Z = rfloat() } end
+		local function rudim() return { Scale = rfloat(), Offset = rfloat() } end
+		local function rvalue(t)
+			if ENUMS_FUZZ[t] then return pick(ENUMS_FUZZ[t]) end
+			if t == "Float" then return rfloat() elseif t == "Int" then return ri(0, 72 ^ 4 - 1) elseif t == "String" then return rstr()
+			elseif t == "Bool" then return rnd() < 0.5 elseif t == "ShortBoundedFloat" or t == "BoundedFloat" then return rnd()
+			elseif t == "Color3" then return rcolor() elseif t == "Vector3" then return rvec3() elseif t == "Vector2" then return { X = rfloat(), Y = rfloat() }
+			elseif t == "UDim2" then return { X = rudim(), Y = rudim() } elseif t == "FloatRange" then return { Min = rfloat(), Max = rfloat() }
+			elseif t == "FloatSequence" then
+				local out = {} for i = 1, ri(0, 4) do out[i] = { Time = rnd(), Value = rfloat(), Envelope = rfloat() } end return out
+			elseif t == "ColorSequence" then
+				local out = {} for i = 1, ri(0, 4) do out[i] = { Time = rnd(), Color = rcolor() } end return out
+			elseif t == "CFrame" then return { Position = rvec3(), EulerXYZ = { X = rangle(), Y = rangle(), Z = rangle() } }
+			elseif t == "InstanceReference" then return { Ref = rstr() } end
+			error("fuzz: no sample for " .. t)
+		end
+		local function rattr()
+			local k = ri(1, 9)
+			if k == 1 then return ri(0, 100000) elseif k == 2 then return -ri(1, 150000) elseif k == 3 then return ri(0, 72 ^ 6 - 1) elseif k == 4 then return rfloat()
+			elseif k == 5 then return rnd() < 0.5 elseif k == 6 then return rstr() elseif k == 7 then return rcolor() elseif k == 8 then return rvec3()
+			else return { Position = rvec3(), EulerXYZ = { X = rangle(), Y = rangle(), Z = rangle() } } end
+		end
+		local ATTR_CLASSES = { Model = true, Folder = true, Part = true, BoolValue = true, MeshPart = true, UnionOperation = true }
+		local function rnode(depth)
+			local class = pick(classes)
+			local props = {}
+			for _, e in ipairs(SPEC[class]) do
+				if rnd() < 0.7 then props[e[1]] = rvalue(e[2]) end
+			end
+			local node = { ClassName = class, Name = (class ~= "BlockMesh") and pick({ rstr(), class, "Name" .. ri(1, 50) }) or nil, Props = props, Attrs = {}, Children = {} }
+			if class == "BoolValue" then props.Value = props.Value or false end
+			if class == "StringValue" then props.Value = props.Value or "" end
+			if ATTR_CLASSES[class] then
+				for i = 1, ri(0, 4) do node.Attrs["k" .. ri(1, 30) .. rstr()] = rattr() end
+			end
+			if depth < 3 then
+				for i = 1, ri(0, 3) do node.Children[#node.Children + 1] = rnode(depth + 1) end
+			end
+			return node
+		end
+		local bad, firstBad = 0, nil
+		local total = 0
+		for i = 1, 300 do
+			local tree = { ClassName = "Folder", Name = "Fuzz" .. i, Props = {}, Attrs = {}, Children = {} }
+			for j = 1, ri(1, 6) do tree.Children[#tree.Children + 1] = rnode(1) end
+			local pieces, info = Encode.encode(tree)
+			local ok, why = pieces ~= nil, info
+			if ok then
+				local m, err = Codec.decode(pieces, host)
+				if not m then ok, why = false, err
+				else
+					ok, why = same(m.Root, tree, "Root")
+					if ok then
+						local again = Encode.encode(m)
+						if not again or table.concat(again) ~= table.concat(pieces) then ok, why = false, "not a fixed point" end
+					end
+				end
+			end
+			total += 1
+			if not ok then bad += 1 firstBad = firstBad or ("tree " .. i .. ": " .. tostring(why)) end
+		end
+		check("stress: " .. total .. " random trees all round trip and are fixed points", bad == 0, firstBad)
+	end
+
+	-- 6c) format limits: at most 5183 distinct strings and 5183 distinct colours per code; the error says so
+	do
+		local many = { ClassName = "Folder", Name = "Many", Props = {}, Attrs = {}, Children = {} }
+		for i = 1, 5200 do many.Children[i] = { ClassName = "Folder", Name = "folder number " .. i, Props = {}, Attrs = {}, Children = {} } end
+		local a, err = Encode.encode(many)
+		check("more than 5183 distinct strings is refused with a clear message", a == nil and type(err) == "string" and string.find(err, "5183", 1, true) ~= nil, err)
+		local colors = { ClassName = "Folder", Name = "Colors", Props = {}, Attrs = {}, Children = {} }
+		for i = 1, 5200 do colors.Children[i] = { ClassName = "Part", Name = "Part", Props = { Color = { R = (i % 72) / 71, G = math.floor(i / 72) / 72, B = (i * 7 % 100) / 100 } }, Attrs = {}, Children = {} } end
+		local b, err2 = Encode.encode(colors)
+		check("more than 5183 distinct colours is refused with a clear message", b == nil and type(err2) == "string" and string.find(err2, "5183", 1, true) ~= nil, err2)
+		-- a big but legal tree encodes in reasonable time and round trips
+		local big = { ClassName = "Folder", Name = "Big", Props = {}, Attrs = {}, Children = {} }
+		for i = 1, 6000 do
+			big.Children[i] = { ClassName = "Part", Name = "Part", Props = { CFrame = { Position = { X = i * 1.5, Y = 3, Z = -i }, EulerXYZ = { X = 0, Y = 1, Z = 0 } }, Size = { X = 4, Y = 1, Z = 4 } }, Attrs = { Id = i % 4000 }, Children = {} }
+		end
+		local t0 = os.clock()
+		local pieces = Encode.encode(big)
+		local dt = os.clock() - t0
+		check("6000 parts encode in under 5 seconds", pieces ~= nil and dt < 5, dt)
+		local mb = pieces and Codec.decode(pieces, host)
+		check("6000 parts round trip", mb ~= nil and #mb.Root.Children == 6000 and same(mb.Root, big, "Root"))
+	end
+
 	-- 7) real maps, when the local data exists
 	local okE, emb = pcall(require, "./_embedded")
 	if okE and type(emb) == "table" then

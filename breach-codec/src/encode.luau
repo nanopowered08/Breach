@@ -130,8 +130,13 @@ local function putShortBounded(w, v)
 end
 
 local function putAngle(w, a) -- an Euler angle in radians, stored as 0..1 over [-pi, pi]
-	a = (a + math.pi) % TWO_PI
-	putBounded(w, a / TWO_PI)
+	if a ~= a then
+		fail("an angle must be a number")
+	end
+	if a > math.pi or a < -math.pi then
+		a = ((a + math.pi) % TWO_PI) - math.pi -- wrap into range; angles already inside (including exactly +-pi) are kept as they are
+	end
+	putBounded(w, (a + math.pi) / TWO_PI)
 end
 
 -- strings are length-prefixed (4 symbols) with &-escapes (version >= 1): & -> &&, newline -> &n, CR -> &r, tab -> &t
@@ -277,6 +282,9 @@ local function internString(run, s)
 	local i = run.stringIndex[s]
 	if i == nil then
 		i = #run.strings + 1
+		if i > MAX2 then
+			fail("the format stores at most 5183 distinct strings (names, attribute names and string values) per code; this tree has more")
+		end
 		run.strings[i] = s
 		run.stringIndex[s] = i
 	end
@@ -290,6 +298,9 @@ local function internColor(run, c)
 	local i = run.colorIndex[key]
 	if i == nil then
 		i = #run.colors + 1
+		if i > MAX2 then
+			fail("the format stores at most 5183 distinct colours per code; this tree has more")
+		end
 		run.colors[i] = { kr, kg, kb }
 		run.colorIndex[key] = i
 	end
