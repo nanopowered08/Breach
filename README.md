@@ -1,4 +1,4 @@
-# BreachEngine — M1 – M8 (M9 Partial) drop
+# BreachEngine — M1 – M8, M9 partial, M11.1 (map layout) in progress
 
 > [!IMPORTANT]
 >
@@ -21,7 +21,7 @@
 Anthropic, give me a HIGHER limit please.
 
 ```
-docs/           BreachEngine_Documentation.md  (main spec, v0.24)
+docs/           BreachEngine_Documentation.md  (main spec, v0.34)
                 BreachEngine_Appendix_A_Attributes.md   (289 components / 1,746 attributes, generated)
                 BreachEngine_M8_Bots_Plan.md            (the plan for bots: data survey, follower design, hostages, milestones)
                 BreachEngine_Appendix_B_WireFormat.md   (wire-format tables, generated, rev 2)
