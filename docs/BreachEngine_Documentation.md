@@ -407,7 +407,7 @@ Reading it:
 | `b` | AttrList end | |
 | `b` `b` | children end for `BoolValue`; children end for root `Folder` | |
 
-### 4.12 The encoder (M12, `BreachEncode.luau`) **[done, in-game import untried]**
+### 4.15 The encoder (M12, `BreachEncode.luau`) **[done, in-game import untried]**
 
 `BreachEncode.encode(mission, opts)` is the mirror of the decoder (pure Luau, no requires, deterministic). Input: a `Codec.decode` result (or a bare root node `{ ClassName, Name, Props, Attrs, Children }`); output: a list of code pieces (`opts.MaxPieceLength` splits the payload, `opts.MapId` 0..5183, `opts.Version` 2 by default or 1, `opts.Comment` adds the `!!!comment!!!` prefix) and an info table (`Warnings`, sizes). `encodeString` returns one code, `encodeStream` the raw symbol stream.
 
@@ -1196,7 +1196,7 @@ Each milestone has an acceptance test that does not require the later ones.
 | M9 | **Combat** | `CombatSpawner`, `ReinforcementPool`, loud/combat transition |
 | M10 | **Hacking + intel** | `NetworkId` graph, `CustomHack`, tablet UI |
 | M11 | **Randomisation** | Seeded `ShuffleContents`, `PickCount`, `PartCollection`/`ShuffleTarget`, `HiddenShuffle` |
-| M12 | **Encode + Standalone** *(the ENCODE half is DONE as portable `BreachEncode.luau`, section 4.12; the Standalone folder format already exists as `BreachStandalone.luau` (M3); an import of an encoded code in the real game is still untried)* | Export your own missions back to an IE code (round-trip *equivalence*) and to the Standalone folder format |
+| M12 | **Encode + Standalone** *(the ENCODE half is DONE as portable `BreachEncode.luau`, section 4.15; the Standalone folder format already exists as `BreachStandalone.luau` (M3); an import of an encoded code in the real game is still untried)* | Export your own missions back to an IE code (round-trip *equivalence*) and to the Standalone folder format |
 
 **Testing strategy.** (1) *Golden decode tests*: decode → canonical JSON dump → commit; any decoder change that alters the dump is reviewed. (2) *Round-trip*: decode → encode → decode, compare trees (never strings, N5). (3) *Headless unit tests* for Codec, Validator, Expr, StateScript, Random — none need Roblox. (4) *Seeded replay*: a fixed seed plus a scripted input log must reproduce the same variable history.
 
