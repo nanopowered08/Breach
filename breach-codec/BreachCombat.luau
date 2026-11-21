@@ -23,7 +23,12 @@
 	Awareness (Attacking only): a guard that sees a drawn weapon, or hears a noise within range, knows the player's position; it keeps
 	that for LoseTrackSeconds after it last saw a drawn weapon or heard something [P], then loses track.
 	Hearing range = MissionSetup.SoundTravelDistance x NoiseScale[kind] [P: the scales]. In Searching a noise is only reported (Aware = false).
-	`concealed` weapons are not detected yet (M9a.1) [P].
+	M9a.1, CONCEALED weapons [P: the rules are guesses for the owner to tune]: a player whose weapon is `concealed` is noticed by
+	  * every DETECTOR guard (`deps.detector(bot)` returns its reaction; the data says which bots carry DetectConcealedWeapons), and
+	  * by ordinary guards too, unless the player wears a disguise that hides weapons (`deps.hidesWeapon(player)`, MissionSetup.ConcealedWeaponDisguise);
+	the detection takes ConcealedSlowdown (2) times as long as a drawn weapon: the sight meter must be full, and then the time it took to fill is
+	waited once more. A concealed weapon that is noticed counts as a weapon seen (flee + radio, lockdown, Attacking). Event: ConcealedWeaponSeen
+	{Bot, Player, Reaction}. Camera and body incidents need nothing here: the alert already turns a body into a lockdown, and a lockdown is Searching.
 
 	M9c, what guards DO once the lockdown has landed (alert level 3), still opt-in and never touching a guard the alert is busy with
 	(fleeing, radioing, questioning, escorting):
@@ -47,6 +52,14 @@
 	  * Health bar rule: a guard shows one iff its class says so (MaxHealth above 200, or ForceHealthDisplay) [O].
 	Events: GuardFired {Bot, Player, Hit, Weapon}  GuardReloading {Bot}  PlayerHit {Bot, Player, Damage, Health}  PlayerDown {Player, By}
 	        BotHit {Bot, Damage, Health, By}  BotDied {Bot, By}
+	M9b, the HOSTAGE POSE [R: the plan, section 2; the numbers are P]: a player may lie down (`combat:lieDown(playerId)` -> true | false, reason) only in
+	Searching, outside trespass cells, and without a drawn weapon; reasons: Off, NotSearching, Attacking, Armed, Trespass, Gone. A lying player is not a threat.
+	A free guard that sees them walks over, waits SuspicionSeconds (0: it helps up straight away [P: open question 2]) plus HelpUpSeconds (3 [R: plan]),
+	helps them up and escorts them to the nearest safe place (`deps.safePlaces`, the mission's HostageEscapePoint parts; with none, it only helps up);
+	the player is moved along with the guard through `deps.movePlayer`. The pose ends by itself in Attacking, in a trespass cell, or when a weapon is drawn.
+	combat:standUp(playerId), combat:posing(playerId).
+	Events: PoseStarted {Player}  PoseEnded {Player, Why: StoodUp | HelpedUp | Attacking | Trespass | Armed | Gone}  GuardHelps {Bot, Player}
+	        PlayerHelpedUp {Bot, Player}  EscortStarted {Bot, Player, X, Y, Z}  EscortArrived {Bot, Player, X, Y, Z}  EscortAborted {Bot, Player, Why}
 ]==]
 
 local Random = (function()
@@ -158,6 +171,12 @@ Combat.Defaults = {
 	PlayerMaxHealth = 100, -- [P] (to confirm with the owner)
 	HuntRetargetDistance = 4, -- studs the known position must move before a hunting guard is sent again [P]
 	InvestigateSeconds = 6, -- how long a guard looks around a noise before going back to its post [P]
+	ConcealedSlowdown = 2, -- a concealed weapon takes this many times longer to notice than a drawn one [P: plan, M9a.1]
+	HelpUpSeconds = 3, -- the guard holds the lying player this long before helping them up [R: plan, HoldTime 3 s]
+	SuspicionSeconds = 0, -- extra pause before helping (guards "may first get suspicious") [P: open question 2]
+	HelpUpRange = 3, -- studs from the player at which the guard starts helping [P]
+	EscortArriveDistance = 2.5, -- studs from the safe place at which the escort is over [P]
+	EscortFollowDistance = 1.5, -- the escorted player is kept this far behind the guard [P]
 }
 
 local Sim = {}
@@ -217,7 +236,9 @@ function Combat.new(deps, opts)
 	return setmetatable({
 		Bots = deps.bots, Sight = deps.sight, Alert = deps.alert, PlayersFn = deps.players, Setup = setup,
 		Params = params, Phase = enabled and "Calm" or "Off", Knows = {}, Seen = {}, Events = {}, Time = 0,
-		Mode = {}, Goal = {}, Wait = {}, Investigate = {},
+		Mode = {}, Goal = {}, Wait = {}, Investigate = {}, Conceal = {}, Pose = {}, Helper = {}, BotHelp = {},
+		SetStanceFn = deps.setStance, MovePlayerFn = deps.movePlayer, TrespassFn = deps.trespassStatus, SafePlaces = deps.safePlaces or {},
+		DetectorFn = deps.detector, HidesFn = deps.hidesWeapon,
 		Health = {}, Down = {}, BotHealth = {}, Ammo = {}, Reload = {}, Fire = {}, Exposure = {},
 		Stream = Random.new(opts.seed or 0),
 		ClassInfo = deps.classInfo or function() return { Health = 120, DamageOutput = 1, ShowsHealthBar = false } end,
@@ -269,6 +290,42 @@ function Sim:_weaponSeen(bot, pl)
 	end
 end
 
+-- M9a.1: does this guard notice a concealed weapon, and when? (see the header)
+function Sim:_concealed(bot, pl, key)
+	local reaction = self.DetectorFn and self.DetectorFn(bot) or nil
+	local hides = self.HidesFn and self.HidesFn(pl) == true
+	if reaction == nil and hides then
+		self.Conceal[key] = nil -- an ordinary guard cannot tell: the disguise hides the weapon
+		return
+	end
+	if self.Seen[key] then
+		if self.Phase == "Attacking" and self.Sight:canSee(bot.Id, pl.Id) then
+			self:_know(bot, pl, "Sight")
+		end
+		return
+	end
+	local sees = self.Sight:canSee(bot.Id, pl.Id)
+	local m = self.Sight:meter(bot.Id, pl.Id)
+	local st = self.Conceal[key]
+	if sees and m > 0 then
+		if not st then
+			st = { T0 = self.Time }
+			self.Conceal[key] = st
+		end
+		if m >= self.Params.NoticeMeter and not st.Full then
+			st.Full = self.Time
+		end
+		if st.Full and self.Time >= st.Full + (st.Full - st.T0) * (self.Params.ConcealedSlowdown - 1) then
+			self.Seen[key] = true
+			self.Conceal[key] = nil
+			emit(self, "ConcealedWeaponSeen", { Bot = bot.Id, Player = pl.Id, Reaction = reaction })
+			self:_weaponSeen(bot, pl)
+		end
+	elseif not sees and m <= 0 then
+		self.Conceal[key] = nil
+	end
+end
+
 function Sim:step(dt)
 	self.Time += dt
 	if self.Phase == "Off" then
@@ -283,7 +340,9 @@ function Sim:step(dt)
 		for _, bot in ipairs(bots) do
 			if not out(bot) and not bot.Flags.Hostage then
 				local key = bot.Id .. "|" .. pl.Id
-				if isDrawn then
+				if pl.Weapon == "concealed" then
+					self:_concealed(bot, pl, key)
+				elseif isDrawn then
 					local sees = self.Sight:canSee(bot.Id, pl.Id)
 					if sees and self.Sight:meter(bot.Id, pl.Id) >= self.Params.NoticeMeter then
 						if not self.Seen[key] then
@@ -295,6 +354,7 @@ function Sim:step(dt)
 					end
 				else
 					self.Seen[key] = nil -- holstered: the next time it is drawn is a new sighting
+					self.Conceal[key] = nil
 				end
 			end
 		end
@@ -312,6 +372,7 @@ function Sim:step(dt)
 			end
 		end
 	end
+	self:_pose(bots, dt)
 	self:_move(bots, dt)
 	self:_shoot(bots, dt)
 end
@@ -351,6 +412,8 @@ function Sim:_move(bots, dt)
 		local id = bot.Id
 		if out(bot) or bot.Flags.Hostage then
 			self.Mode[id], self.Goal[id], self.Wait[id], self.Investigate[id] = nil, nil, nil, nil
+		elseif self.BotHelp[id] then
+			-- helping up or escorting a lying player (M9b): that walk is not the lockdown's to change
 		elseif self.Alert:busy(id) then
 			self.Mode[id] = nil -- the alert has the guard: not ours to move
 		elseif not lockdown then
@@ -387,6 +450,207 @@ function Sim:_move(bots, dt)
 						self.Bots:hold(id, "Holding")
 					end
 				end
+			end
+		end
+	end
+end
+
+---------------------------------------------------------------------------------------------------------- M9b: the hostage pose
+function Sim:posing(playerId)
+	return self.Pose[playerId] ~= nil
+end
+
+local function playerById(self, id)
+	for _, pl in ipairs(self.PlayersFn()) do
+		if pl.Id == id then
+			return pl
+		end
+	end
+	return nil
+end
+
+function Sim:_trespassing(id)
+	if not self.TrespassFn then
+		return false
+	end
+	local st = self.TrespassFn(id)
+	return st ~= nil and st ~= "allowed"
+end
+
+-- Lie down like a hostage. Only in Searching, outside trespass cells, without a drawn weapon. Returns true, or false and the reason.
+function Sim:lieDown(playerId)
+	local pl = playerById(self, playerId)
+	if not pl or pl.Exited then
+		return false, "Gone"
+	end
+	if self.Phase == "Off" then
+		return false, "Off"
+	elseif self.Phase == "Attacking" then
+		return false, "Attacking"
+	elseif self.Phase ~= "Searching" then
+		return false, "NotSearching"
+	elseif drawn(pl) then
+		return false, "Armed"
+	elseif self:_trespassing(playerId) then
+		return false, "Trespass"
+	end
+	if self.Pose[playerId] then
+		return true
+	end
+	self.Pose[playerId] = { Since = self.Time }
+	if self.SetStanceFn then
+		self.SetStanceFn(playerId, "lying")
+	end
+	emit(self, "PoseStarted", { Player = playerId })
+	return true
+end
+
+function Sim:_endPose(playerId, why)
+	if not self.Pose[playerId] then
+		return
+	end
+	self.Pose[playerId] = nil
+	if self.SetStanceFn then
+		self.SetStanceFn(playerId, "stand")
+	end
+	emit(self, "PoseEnded", { Player = playerId, Why = why })
+end
+
+function Sim:standUp(playerId)
+	if not self.Pose[playerId] then
+		return false
+	end
+	self:_endPose(playerId, "StoodUp")
+	local h = self.Helper[playerId]
+	if h and h.Stage ~= "Escorting" then
+		self:_dropHelper(playerId, "StoodUp")
+	end
+	return true
+end
+
+function Sim:_dropHelper(playerId, why)
+	local h = self.Helper[playerId]
+	if not h then
+		return
+	end
+	self.Helper[playerId] = nil
+	self.BotHelp[h.Bot] = nil
+	local bot = self.Bots:bot(h.Bot)
+	if bot and not out(bot) then
+		self.Mode[h.Bot] = nil
+		self.Bots:resume(h.Bot)
+	end
+	emit(self, "EscortAborted", { Bot = h.Bot, Player = playerId, Why = why })
+end
+
+local function sortedKeys(t)
+	local keys = {}
+	for k in pairs(t) do
+		keys[#keys + 1] = k
+	end
+	table.sort(keys)
+	return keys
+end
+
+function Sim:_nearestSafePlace(x, z)
+	local best, bd
+	for _, spot in ipairs(self.SafePlaces) do
+		local d = (spot.X - x) ^ 2 + (spot.Z - z) ^ 2
+		if not bd or d < bd then
+			best, bd = spot, d
+		end
+	end
+	return best
+end
+
+function Sim:_pose(bots, dt)
+	local p = self.Params
+	-- the pose ends by itself
+	for _, id in ipairs(sortedKeys(self.Pose)) do
+		local pl = playerById(self, id)
+		if not pl or pl.Exited then
+			self:_endPose(id, "Gone")
+		elseif drawn(pl) then
+			self:_endPose(id, "Armed") -- the weapon is the cause, even when it also turned the phase to Attacking
+		elseif self.Phase == "Attacking" then
+			self:_endPose(id, "Attacking")
+		elseif self:_trespassing(id) then
+			self:_endPose(id, "Trespass")
+		end
+	end
+	-- a helper that is gone or busy elsewhere is dropped
+	for _, id in ipairs(sortedKeys(self.Helper)) do
+		local h = self.Helper[id]
+		local bot = self.Bots:bot(h.Bot)
+		if out(bot) or bot.Flags.Hostage then
+			self:_dropHelper(id, "GuardOut")
+		elseif h.Stage ~= "Escorting" and not self.Pose[id] then
+			self:_dropHelper(id, "PoseEnded")
+		end
+	end
+	-- a free guard that sees a lying player goes to help
+	for _, id in ipairs(sortedKeys(self.Pose)) do
+		if not self.Helper[id] then
+			for _, bot in ipairs(bots) do
+				if not out(bot) and not bot.Flags.Hostage and not self.BotHelp[bot.Id] and not self.Alert:busy(bot.Id) and self.Sight:canSee(bot.Id, id) then
+					local pl = playerById(self, id)
+					self.Helper[id] = { Bot = bot.Id, Stage = "Going" }
+					self.BotHelp[bot.Id] = id
+					self.Investigate[bot.Id], self.Knows[bot.Id] = nil, nil
+					emit(self, "GuardHelps", { Bot = bot.Id, Player = id })
+					self:_send(bot, "HelpingUp", "HelpingUp", pl.X, pl.Y, pl.Z)
+					break
+				end
+			end
+		end
+	end
+	-- walk the helpers through their stages
+	for _, id in ipairs(sortedKeys(self.Helper)) do
+		local h = self.Helper[id]
+		local bot = self.Bots:bot(h.Bot)
+		local pl = playerById(self, id)
+		if not pl then
+			self:_dropHelper(id, "Gone")
+		elseif h.Stage == "Going" then
+			local bx, by, bz = self.Bots:position(bot.Id)
+			if bot.State == "HelpingUp" or (bx and dist3(bx, by, bz, pl.X, pl.Y, pl.Z) <= p.HelpUpRange) then
+				h.Stage, h.Wait = "Holding", p.SuspicionSeconds + p.HelpUpSeconds
+				self.Bots:hold(bot.Id, "HelpingUp")
+			end
+		elseif h.Stage == "Holding" then
+			h.Wait -= dt
+			if h.Wait <= 0 then
+				self:_endPose(id, "HelpedUp")
+				emit(self, "PlayerHelpedUp", { Bot = bot.Id, Player = id })
+				local spot = self:_nearestSafePlace(pl.X, pl.Z)
+				if spot then
+					h.Stage, h.Dest = "Escorting", { X = spot.X, Y = spot.Y or 0, Z = spot.Z }
+					emit(self, "EscortStarted", { Bot = bot.Id, Player = id, X = h.Dest.X, Y = h.Dest.Y, Z = h.Dest.Z })
+					self:_send(bot, "Escorting", "Escorting", h.Dest.X, h.Dest.Y, h.Dest.Z)
+				else
+					self.Helper[id] = nil
+					self.BotHelp[bot.Id] = nil
+					self.Mode[bot.Id] = nil
+					self.Bots:resume(bot.Id)
+				end
+			end
+		elseif h.Stage == "Escorting" then
+			local bx, by, bz = self.Bots:position(bot.Id)
+			if bx and self.MovePlayerFn then
+				local dx, dz = h.Dest.X - bx, h.Dest.Z - bz
+				local len = math.sqrt(dx * dx + dz * dz)
+				local ux, uz = 0, 0
+				if len > 1e-6 then
+					ux, uz = dx / len, dz / len
+				end
+				self.MovePlayerFn(id, bx - ux * p.EscortFollowDistance, by, bz - uz * p.EscortFollowDistance)
+			end
+			if bot.State == "Escorting" or (bx and dist3(bx, by, bz, h.Dest.X, h.Dest.Y, h.Dest.Z) <= p.EscortArriveDistance) then
+				emit(self, "EscortArrived", { Bot = bot.Id, Player = id, X = h.Dest.X, Y = h.Dest.Y, Z = h.Dest.Z })
+				self.Helper[id] = nil
+				self.BotHelp[bot.Id] = nil
+				self.Mode[bot.Id] = nil
+				self.Bots:resume(bot.Id)
 			end
 		end
 	end

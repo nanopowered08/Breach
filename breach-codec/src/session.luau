@@ -40,12 +40,30 @@ function Session.new(M, mission, world, setup, opts)
 	tr:attach(sight, bots, players)
 	local alert = M.Alert.new(logic, { mission = mission, bots = bots, sight = sight, trespass = tr, players = players, world = world, params = opts.alertParams, hidingSpots = opts.hidingSpots })
 	sight.LevelFn = function() return alert:level() end -- the higher the alert level, the faster guards notice (Calm 0.9x, Normal 1x, Alert 1.1x)
+	local model = M.CombatData and M.CombatData.fromMission(mission, setup, { expr = M.Expr }) or nil
+	local CD = M.CombatData
 	local combat = M.Combat and M.Combat.new({ bots = bots, sight = sight, alert = alert, players = players, setup = setup,
-		classInfo = M.CombatData and function(bot) return M.CombatData.classInfo(bot.Class) end or nil }, { enabled = opts.twoPhase == true, params = opts.combatParams, seed = seed })
+		classInfo = CD and function(bot) return CD.classInfo(bot.Class) end or nil,
+		detector = model and function(bot) return CD.detectorReaction(model, bot.Node and bot.Node.Path or bot.Path) or CD.detectorReaction(model, bot.Name) end or nil,
+		hidesWeapon = model and function(pl) return CD.disguiseHidesWeapon(model, pl.Disguise) end or nil,
+		setStance = function(id, stance) return props:setStance(id, stance) end,
+		movePlayer = function(id, x, y, z) return props:move(id, x, y, z) end,
+		trespassStatus = function(id) return (tr:statusOf(id)) end,
+		safePlaces = opts.safePlaces or (function()
+			local list = {}
+			for _, nd in ipairs(mission and mission.Nodes or {}) do
+				local cf = nd.Props and nd.Props.CFrame
+				if nd.Name == "HostageEscapePoint" and cf and cf.Position then
+					list[#list + 1] = { X = cf.Position.X, Y = cf.Position.Y or 0, Z = cf.Position.Z }
+				end
+			end
+			return list
+		end)(),
+	}, { enabled = opts.twoPhase == true, params = opts.combatParams, seed = seed })
 	local hostage = M.Hostage.new(logic, { mission = mission, bots = bots, nav = nav, players = players, props = props, sight = sight, world = world, alert = alert, params = opts.hostageParams, altTriggers = opts.altTriggers })
 	local behavior = M.Behavior.new(logic, { mission = mission, bots = bots, nav = nav, alert = alert, players = players, params = opts.behaviorParams })
 	return setmetatable({
-		Logic = logic, Nav = nav, Bots = bots, Props = props, Sight = sight, Trespass = tr, Alert = alert, Combat = combat, Hostage = hostage, Behavior = behavior,
+		Logic = logic, Nav = nav, Bots = bots, Props = props, Sight = sight, Trespass = tr, Alert = alert, Combat = combat, Hostage = hostage, Behavior = behavior, CombatModel = model,
 		Players = players, Time = 0, Log = {}, Trace = {},
 	}, Sim)
 end

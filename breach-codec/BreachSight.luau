@@ -12,7 +12,7 @@
 	    sight:noticedBy(playerId) -> { botId, ... }    sight:isNoticed(playerId)
 	    sight:drainEvents()  -- SightSeen SightSuspicious SightNoticed SightLost    { Bot, Player, Time, Meter, Distance }
 
-	playersFn() -> { { Id =, X =, Y =, Z =, Stance = "stand" | "crouch" | "sprint", Exited = bool, Disguise = string?, Armed = bool?, Weapon = "holstered" | "drawn" | "concealed"? }, ... }   (Sight.propsPlayers(sim) adapts BreachProps)
+	playersFn() -> { { Id =, X =, Y =, Z =, Stance = "stand" | "crouch" | "sprint" | "lying", Exited = bool, Disguise = string?, Armed = bool?, Weapon = "holstered" | "drawn" | "concealed"? }, ... }   (Sight.propsPlayers(sim) adapts BreachProps)
 
 	A bot sees a player when ALL of these hold [P: every number is a default in Sight.Defaults, to be corrected by feel]:
 	  * within ViewRange x the stance factor (crouching shrinks it, sprinting stretches it);
@@ -34,7 +34,7 @@ Sight.Defaults = {
 	ViewRange = 70, -- studs
 	FovDegrees = 110,
 	PeripheralRadius = 6, -- noticed from any direction this close (still needs line of sight)
-	StanceRange = { stand = 1, crouch = 0.6, sprint = 1.25 },
+	StanceRange = { stand = 1, crouch = 0.6, sprint = 1.25, lying = 0.5 }, -- lying [P]: the hostage pose of BreachCombat M9b
 	NoticeNear = 0.6, -- seconds to notice at point blank (DetectionSpeed 1)
 	NoticeFar = 4.0, -- ... and at the edge of the range
 	Decay = 0.5, -- meter units per second when not seen

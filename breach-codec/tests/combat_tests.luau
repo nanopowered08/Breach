@@ -53,7 +53,9 @@ return function(check)
 		local tr = Trespass.new(w, { Cells = { Public = {} } }, l)
 		tr:attach(sight, bots, players)
 		local al = Alert.new(l, { mission = m, bots = bots, sight = sight, trespass = tr, players = players, world = w })
-		local combat = Combat.new({ bots = bots, sight = sight, alert = al, players = players, setup = opts.setup, classInfo = opts.classInfo }, { enabled = opts.enabled ~= false, params = opts.params, seed = opts.seed })
+		local combat = Combat.new({ bots = bots, sight = sight, alert = al, players = players, setup = opts.setup, classInfo = opts.classInfo, detector = opts.detector, hidesWeapon = opts.hidesWeapon,
+			setStance = function(id, st) return pr:setStance(id, st) end, movePlayer = function(id, x, y, z) return pr:move(id, x, y, z) end,
+			trespassStatus = opts.trespassStatus or function(id) return (tr:statusOf(id)) end, safePlaces = opts.safePlaces }, { enabled = opts.enabled ~= false, params = opts.params, seed = opts.seed })
 		local function run(seconds) for _ = 1, math.floor(seconds / DT + 0.5) do l:advance(DT) bots:step(DT) sight:step(DT) tr:step(DT) al:step(DT) combat:step(DT) end end
 		return combat, al, bots, pr, run
 	end
@@ -82,8 +84,166 @@ return function(check)
 		check("combat: a holstered weapon in plain view stays Calm", combat:phase() == "Calm" and #kinds(combat:drainEvents(), "WeaponSeen") == 0)
 		check("combat: setWeapon rejects an unknown state", pr:setWeapon("p1", "bazooka") == false and pr:setWeapon("nobody", "drawn") == false)
 		check("combat: concealed is not armed", pr:setWeapon("p1", "concealed") == true and Sight.propsPlayers(pr)()[1].Armed == false and Sight.propsPlayers(pr)()[1].Weapon == "concealed")
-		run(4)
-		check("combat: a concealed weapon is not detected yet [P]", combat:phase() == "Calm")
+	end
+
+	-- M9a.1: concealed weapons
+	local function timeToAttacking(weapon, opts, disguise, seconds)
+		local combat, al, bots, pr, run = live({ { X = -20 } }, opts)
+		if disguise then pr:setDisguise("p1", disguise) end
+		pr:setWeapon("p1", weapon)
+		local t = 0
+		while t < (seconds or 30) and combat:phase() ~= "Attacking" do
+			run(0.25)
+			t += 0.25
+		end
+		return combat:phase() == "Attacking" and t or nil, combat, al, bots
+	end
+
+	do
+		local tDrawn = timeToAttacking("drawn", nil)
+		local tConc, combat = timeToAttacking("concealed", nil)
+		check("combat: a drawn weapon is noticed", tDrawn ~= nil, tDrawn)
+		check("combat: an ordinary guard notices a concealed weapon too, when no disguise hides it [P]", tConc ~= nil, tConc)
+		check("combat: ... in about ConcealedSlowdown (2) times as long as a drawn one", tDrawn ~= nil and tConc ~= nil and tConc >= tDrawn * 1.6 and tConc <= tDrawn * 2.6, tostring(tDrawn) .. " vs " .. tostring(tConc))
+		local evs = combat:drainEvents()
+		check("combat: ConcealedWeaponSeen then WeaponSeen, then Attacking", #kinds(evs, "ConcealedWeaponSeen") == 1 and #kinds(evs, "WeaponSeen") == 1 and combat:phase() == "Attacking")
+		local fast = timeToAttacking("concealed", { params = { ConcealedSlowdown = 1 } })
+		check("combat: ConcealedSlowdown = 1 makes it as quick as a drawn weapon", fast ~= nil and tDrawn ~= nil and math.abs(fast - tDrawn) <= 0.5, tostring(fast))
+	end
+
+	do -- a disguise that hides weapons protects against ordinary guards, not against detectors
+		local hides = function(pl) return pl.Disguise == "Pro" end
+		local never = timeToAttacking("concealed", { hidesWeapon = hides }, "Pro", 40)
+		check("combat: a hiding disguise: an ordinary guard never notices a concealed weapon", never == nil)
+		local seen, combat = timeToAttacking("concealed", { hidesWeapon = hides, detector = function() return "SetAlarmedWithAlert" end }, "Pro", 40)
+		check("combat: ... but a detector guard does, whatever the disguise", seen ~= nil)
+		local ev = kinds(combat:drainEvents(), "ConcealedWeaponSeen")[1]
+		check("combat: ... and the event carries its reaction", ev ~= nil and ev.Reaction == "SetAlarmedWithAlert")
+		local other = timeToAttacking("concealed", { hidesWeapon = hides }, "Guard", 40)
+		check("combat: a disguise that does not hide weapons does not protect", other ~= nil)
+	end
+
+	do -- holstering in time resets the count; drawing is still instant
+		local combat, al, bots, pr, run = live({ { X = -20 } })
+		pr:setWeapon("p1", "concealed")
+		run(1.5)
+		pr:setWeapon("p1", "holstered")
+		run(10)
+		check("combat: holstered before the guard is sure: nothing seen", combat:phase() == "Calm")
+		pr:setWeapon("p1", "drawn")
+		run(2)
+		check("combat: ... and drawing afterwards is a normal sighting", combat:phase() == "Attacking")
+	end
+
+	-- M9b: the hostage pose
+	local function searching(botDefs, opts)
+		local combat, al, bots, pr, run = live(botDefs, opts)
+		al:addAnomaly("Body", 0, 0, 0)
+		local t = 0
+		while combat:phase() ~= "Searching" and t < 20 do run(0.5) t += 0.5 end
+		combat:drainEvents()
+		return combat, al, bots, pr, run
+	end
+	local function stanceOf(pr, id) for _, p in ipairs(Sight.propsPlayers(pr)()) do if p.Id == id then return p.Stance end end end
+
+	do -- refusals
+		local calm, _, _, prC = live({ { X = -20 } })
+		local ok, why = calm:lieDown("p1")
+		check("pose: in Calm it is refused (NotSearching)", ok == false and why == "NotSearching")
+		local off = live({ { X = -20 } }, { enabled = false })
+		check("pose: not opted in it is refused (Off)", select(2, off:lieDown("p1")) == "Off")
+		check("pose: an unknown player is refused (Gone)", select(2, calm:lieDown("nobody")) == "Gone")
+		local combat, al, bots, pr, run = searching({ { X = -20 }, { X = -25 } })
+		check("pose: the lockdown without a known weapon is Searching", combat:phase() == "Searching", combat:phase())
+		pr:setWeapon("p1", "drawn")
+		check("pose: with a drawn weapon it is refused (Armed)", select(2, combat:lieDown("p1")) == "Armed")
+		pr:setWeapon("p1", "holstered")
+		local tr = "allowed"
+		local c2, _, _, pr2 = searching({ { X = -20 }, { X = -25 } }, { trespassStatus = function() return tr end })
+		tr = "minor"
+		check("pose: inside a trespass cell it is refused (Trespass)", select(2, c2:lieDown("p1")) == "Trespass")
+		local c3, _, _, pr3, run3 = searching({ { X = -20 }, { X = -25 } })
+		pr3:addPlayer("p2", -12, 0, 2)
+		pr3:setWeapon("p2", "drawn")
+		run3(3)
+		check("pose: in Attacking it is refused (Attacking)", c3:phase() == "Attacking" and select(2, c3:lieDown("p1")) == "Attacking", c3:phase())
+	end
+
+	do -- lying down and standing up, stance reaches the sight layer
+		local combat, al, bots, pr, run = searching({ { X = -20 }, { X = -25 } }, { safePlaces = {} })
+		check("pose: lying down works in Searching", combat:lieDown("p1") == true and combat:posing("p1") and stanceOf(pr, "p1") == "lying")
+		check("pose: PoseStarted is reported", #kinds(combat:drainEvents(), "PoseStarted") == 1)
+		check("pose: standing up ends it", combat:standUp("p1") == true and not combat:posing("p1") and stanceOf(pr, "p1") == "stand")
+		local ev = kinds(combat:drainEvents(), "PoseEnded")[1]
+		check("pose: ... with the reason StoodUp", ev ~= nil and ev.Why == "StoodUp")
+		check("pose: standing up when not lying does nothing", combat:standUp("p1") == false)
+		check("pose: a lying player is harder to spot (range factor)", Sight.Defaults.StanceRange.lying < Sight.Defaults.StanceRange.crouch)
+	end
+
+	do -- a free guard helps up and escorts to the nearest safe place
+		local combat, al, bots, pr, run = searching({ { X = -20 }, { X = -25 } }, { safePlaces = { { X = 40, Y = 0, Z = 0 }, { X = -80, Y = 0, Z = 60 } } })
+		combat:lieDown("p1")
+		run(40)
+		local evs = combat:drainEvents()
+		local helps, upEv, started, arrived = kinds(evs, "GuardHelps")[1], kinds(evs, "PlayerHelpedUp")[1], kinds(evs, "EscortStarted")[1], kinds(evs, "EscortArrived")[1]
+		check("pose: a guard that sees the lying player goes to help", helps ~= nil and helps.Player == "p1")
+		check("pose: it helps them up, after the hold time", upEv ~= nil and upEv.Time - helps.Time >= combat.Params.HelpUpSeconds, upEv and helps and (upEv.Time - helps.Time))
+		check("pose: the pose ends with HelpedUp and the player stands", stanceOf(pr, "p1") == "stand" and #kinds(evs, "PoseEnded") == 1 and kinds(evs, "PoseEnded")[1].Why == "HelpedUp")
+		check("pose: it escorts them to the NEAREST safe place", started ~= nil and started.X == 40 and started.Z == 0, started and started.X)
+		check("pose: the escort arrives", arrived ~= nil)
+		local px, py, pz = pr.Players.p1.Pos[1], pr.Players.p1.Pos[2], pr.Players.p1.Pos[3]
+		check("pose: the player ends up at the safe place (moved along with the guard)", math.abs(px - 40) <= 4 and math.abs(pz) <= 4, px)
+		check("pose: the guard goes back to its job (not stuck)", bots:bot(helps.Bot).Command ~= "Escorting")
+	end
+
+	do -- no safe place: it only helps up
+		local combat, al, bots, pr, run = searching({ { X = -20 }, { X = -25 } }, { safePlaces = {} })
+		combat:lieDown("p1")
+		run(30)
+		local evs = combat:drainEvents()
+		check("pose: with no safe place the guard still helps them up", #kinds(evs, "PlayerHelpedUp") == 1 and #kinds(evs, "EscortStarted") == 0)
+	end
+
+	do -- the pose ends by itself
+		local combat, al, bots, pr, run = searching({ { X = -20 }, { X = -25 } })
+		combat:lieDown("p1")
+		pr:setWeapon("p1", "drawn")
+		run(0.2)
+		local ev = kinds(combat:drainEvents(), "PoseEnded")[1]
+		check("pose: drawing a weapon ends it (Armed)", ev ~= nil and ev.Why == "Armed" and not combat:posing("p1"))
+		local c2, _, _, pr2, run2 = searching({ { X = -20 }, { X = -25 } })
+		pr2:addPlayer("p2", -12, 0, 2)
+		c2:lieDown("p1")
+		pr2:setWeapon("p2", "drawn")
+		run2(3)
+		local ev2 = kinds(c2:drainEvents(), "PoseEnded")[1]
+		check("pose: the phase turning Attacking ends it", ev2 ~= nil and ev2.Why == "Attacking" and stanceOf(pr2, "p1") == "stand", ev2 and ev2.Why)
+		local tr = "allowed"
+		local c3, _, _, pr3, run3 = searching({ { X = -20 }, { X = -25 } }, { trespassStatus = function() return tr end })
+		c3:lieDown("p1")
+		tr = "major"
+		run3(0.2)
+		local ev3 = kinds(c3:drainEvents(), "PoseEnded")[1]
+		check("pose: entering a trespass cell ends it", ev3 ~= nil and ev3.Why == "Trespass")
+	end
+
+	do -- determinism
+		local function trace()
+			local combat, al, bots, pr, run = searching({ { X = -20 }, { X = -25 } }, { safePlaces = { { X = 40, Y = 0, Z = 0 } }, seed = 3 })
+			combat:lieDown("p1")
+			run(40)
+			local t = {}
+			for _, e in ipairs(combat:drainEvents()) do t[#t + 1] = e.Kind .. "@" .. string.format("%.2f", e.Time) .. ":" .. tostring(e.Player or "") end -- bot ids are left out: they come from a global counter in these tests
+			return table.concat(t, "|")
+		end
+		check("pose: two runs give the same events", trace() == trace())
+	end
+
+	do -- a body is a lockdown, a lockdown is Searching (the camera/body triggers of M9a.1 need no new code)
+		local combat, al, bots, pr, run = live({ { X = -20 } })
+		al:addAnomaly("Body", 0, 0, 0)
+		run(8)
+		check("combat: a body that a guard sees raises the lockdown and the phase is Searching", al:level() >= 3 and combat:phase() == "Searching", tostring(al:level()) .. " " .. combat:phase())
 	end
 
 	do -- a drawn weapon is seen: Attacking, the guard flees and radios, the lockdown lands with its call

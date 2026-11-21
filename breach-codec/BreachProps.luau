@@ -406,10 +406,10 @@ function Sim:setDisguise(id, disguise)
 	return true
 end
 
--- "stand" (default), "crouch" or "sprint": changes how far and how fast a player is noticed (BreachSight).
+-- "stand" (default), "crouch", "sprint" or "lying" (the hostage pose, BreachCombat M9b): changes how far and how fast a player is noticed (BreachSight).
 function Sim:setStance(id, stance)
 	local p = self.Players[id]
-	if not p or (stance ~= "stand" and stance ~= "crouch" and stance ~= "sprint") then
+	if not p or (stance ~= "stand" and stance ~= "crouch" and stance ~= "sprint" and stance ~= "lying") then
 		return false
 	end
 	p.Stance = stance
