@@ -8,6 +8,7 @@ local Bots = require("../BreachBots")
 local Nav = require("../BreachNav")
 local Logic = require("../BreachLogic")
 local Props = require("../BreachProps")
+local Explosives = require("../BreachExplosives")
 
 local DT = 1 / 20
 
@@ -53,11 +54,14 @@ return function(check)
 		local tr = Trespass.new(w, { Cells = { Public = {} } }, l)
 		tr:attach(sight, bots, players)
 		local al = Alert.new(l, { mission = m, bots = bots, sight = sight, trespass = tr, players = players, world = w })
-		local combat = Combat.new({ bots = bots, sight = sight, alert = al, players = players, setup = opts.setup, classInfo = opts.classInfo, detector = opts.detector, hidesWeapon = opts.hidesWeapon,
+		local combat
+		local ex = Explosives.new({ players = players, bots = bots, damagePlayer = function(id, amount, by) return combat:hurtPlayer(id, amount, by) end,
+			damageBot = function(id, amount, by) return combat:damageBot(id, amount, by) end })
+		combat = Combat.new({ bots = bots, sight = sight, alert = al, players = players, setup = opts.setup, explosives = (not opts.noExplosives) and ex or nil, classInfo = opts.classInfo, detector = opts.detector, hidesWeapon = opts.hidesWeapon,
 			setStance = function(id, st) return pr:setStance(id, st) end, movePlayer = function(id, x, y, z) return pr:move(id, x, y, z) end,
 			trespassStatus = opts.trespassStatus or function(id) return (tr:statusOf(id)) end, safePlaces = opts.safePlaces }, { enabled = opts.enabled ~= false, params = opts.params, seed = opts.seed })
-		local function run(seconds) for _ = 1, math.floor(seconds / DT + 0.5) do l:advance(DT) bots:step(DT) sight:step(DT) tr:step(DT) al:step(DT) combat:step(DT) end end
-		return combat, al, bots, pr, run
+		local function run(seconds) for _ = 1, math.floor(seconds / DT + 0.5) do l:advance(DT) bots:step(DT) sight:step(DT) tr:step(DT) al:step(DT) combat:step(DT) ex:step(DT) end end
+		return combat, al, bots, pr, run, ex
 	end
 	local function botId(bots, i) return bots:all()[i].Id end
 
@@ -444,12 +448,12 @@ return function(check)
 	local function count(evs, kind, pred) local n = 0 for _, e in ipairs(evs) do if e.Kind == kind and (pred == nil or pred(e)) then n += 1 end end return n end
 	-- lockdown first, so a weapon seen goes straight to Attacking with no flight; returns after the weapon was seen
 	local function armedFight(opts)
-		local combat, al, bots, pr, run = live({ { X = -20 } }, opts)
+		local combat, al, bots, pr, run, ex = live({ { X = -20 } }, opts)
 		al:lockdown("test")
 		pr:setWeapon("p1", "drawn")
 		local waited = 0
 		while combat:phase() ~= "Attacking" and waited < 5 do run(0.1) waited += 0.1 end
-		return combat, al, bots, pr, run
+		return combat, al, bots, pr, run, ex
 	end
 
 	do
@@ -620,4 +624,121 @@ return function(check)
 		local a, b = trace(), trace()
 		check("combat: two identical runs give identical events", a == b and #a > 0, a)
 	end
+	-------------------------------------------------------------------------------- M9e: grenades and C4
+	local GRENADIER = function() return { Health = 150, DamageOutput = 1, Grenades = true, GrenadeInterval = { 2, 2 }, GrenadeRange = { 6, 25 } } end
+	local TOUGH = { SURE = true, PlayerMaxHealth = 100000 }
+	local function throws(combat, evs) return count(evs, "GuardThrows") end
+
+	do
+		local combat, al, bots, pr, run, ex = armedFight({ classInfo = GRENADIER, params = { PlayerMaxHealth = 100000 } })
+		combat:drainEvents()
+		run(10)
+		local evs = combat:drainEvents()
+		local th = {}
+		for _, e in ipairs(evs) do if e.Kind == "GuardThrows" then th[#th + 1] = e end end
+		check("grenade ai: a grenadier that knows where the player is (10 studs) throws every GrenadeInterval", #th >= 3 and #th <= 5, #th)
+		check("grenade ai: each lands within the scatter of the known position", th[1] ~= nil and math.abs(th[1].X - (-10)) <= 1.5 + 1e-9 and math.abs(th[1].Z) <= 1.5 + 1e-9, th[1] and th[1].X)
+		check("grenade ai: the grenades go off and hurt the player through hurtPlayer (PlayerHit, with the guard as source)", count(evs, "PlayerHit", function(e) return e.Damage > 1 end) >= 2)
+		check("grenade ai: explosives are driven by the host (their own events)", #ex:drainEvents() > 0)
+	end
+
+	do -- range, class, phase, explosives
+		local c1, a1, b1, p1, r1 = armedFight({ classInfo = GRENADIER, params = { PlayerMaxHealth = 100000 } })
+		p1:move("p1", -17, 0, 0) -- 3 studs from the guard: closer than GrenadeRange 6
+		c1:drainEvents()
+		r1(8)
+		check("grenade ai: a target closer than the minimum range is not grenaded", count(c1:drainEvents(), "GuardThrows") == 0)
+		local c2, a2, b2, p2, r2 = armedFight({ classInfo = GRENADIER, params = { PlayerMaxHealth = 100000 } })
+		p2:move("p1", 20, 0, 0) -- 40 studs: beyond GrenadeRange 25
+		c2:drainEvents()
+		r2(0.3)
+		check("grenade ai: a target beyond the maximum range is not grenaded yet", count(c2:drainEvents(), "GuardThrows") == 0)
+		r2(10)
+		local ev2 = c2:drainEvents()
+		local order = {}
+		for _, e in ipairs(ev2) do if e.Kind == "GuardMoves" then order[#order + 1] = e.Mode end end
+		check("grenade ai: it closes in until the player is in range, then holds (Covering) and throws", count(ev2, "GuardThrows") >= 1 and order[#order] == "Covering", table.concat(order, ","))
+		local c3, a3, b3, p3, r3 = armedFight({ classInfo = function() return { Health = 120, DamageOutput = 1, Grenades = false } end, params = { PlayerMaxHealth = 100000 } })
+		c3:drainEvents()
+		r3(8)
+		check("grenade ai: a class without grenades never throws", count(c3:drainEvents(), "GuardThrows") == 0)
+		local c4, a4, b4, p4, r4 = armedFight({ classInfo = GRENADIER, noExplosives = true, params = { PlayerMaxHealth = 100000 } })
+		c4:drainEvents()
+		r4(8)
+		check("grenade ai: with no explosives dependency nothing is thrown", count(c4:drainEvents(), "GuardThrows") == 0)
+		local c5, a5, b5, p5, r5 = live({ { X = -20 } }, { classInfo = GRENADIER })
+		p5:setWeapon("p1", "drawn")
+		r5(0.5) -- below lockdown the guard flees and radios: Attacking has begun but the lockdown has not landed
+		check("grenade ai: nothing is thrown before the lockdown has landed", count(c5:drainEvents(), "GuardThrows") == 0)
+		local c6, a6, b6, p6, r6 = armedFight({ classInfo = function() return { Health = 150, DamageOutput = 1, Grenades = true, GrenadeInterval = { 12, 20 }, GrenadeRange = { 6, 25 } } end, params = { PlayerMaxHealth = 100000 } })
+		c6:drainEvents()
+		r6(11)
+		check("grenade ai: with a 12 to 20 s interval nothing is thrown in the first 11 s", count(c6:drainEvents(), "GuardThrows") == 0)
+		r6(10)
+		check("grenade ai: ... and one has been thrown by 21 s", count(c6:drainEvents(), "GuardThrows") >= 1)
+		local c7, a7, b7, p7, r7 = armedFight({ classInfo = function() return { Health = 150, DamageOutput = 0.5, Grenades = true, GrenadeInterval = { 2, 2 }, GrenadeRange = { 6, 25 } } end, params = { PlayerMaxHealth = 100000 } })
+		c7:drainEvents()
+		r7(6)
+		local mx = 0
+		for _, e in ipairs(c7:drainEvents()) do if e.Kind == "PlayerHit" and e.Damage > mx then mx = e.Damage end end
+		check("grenade ai: the class DamageOutput scales the explosion (0.5: at most 30)", mx > 1 and mx <= 30 + 1e-9, mx)
+	end
+
+	do -- C4
+		local HEAVY = function() return { Health = 250, DamageOutput = 1, PlantsC4 = true } end
+		local combat, al, bots, pr, run, ex = armedFight({ classInfo = HEAVY, params = { PlayerMaxHealth = 100000 } })
+		combat.Sight.canSee = function() return false end -- the heavy cannot see the player: it only knows where they are
+		pr:move("p1", -14, 0, 0)
+		combat:noise("shot", -14, 0, 0, "p1")
+		combat:drainEvents()
+		run(1)
+		local evs = combat:drainEvents()
+		check("c4 ai: a heavy that knows where the player is, cannot see them and is within 8 studs plants C4 where it stands", count(evs, "GuardPlants") == 1 and #ex:active() == 1, count(evs, "GuardPlants"))
+		run(20)
+		local later = combat:drainEvents()
+		combat:noise("shot", -14, 0, 0, "p1") -- it lost track after 20 s: the player makes noise again
+		check("c4 ai: it detonates and hurts the player through hurtPlayer", count(later, "PlayerHit", function(e) return e.Damage > 1 end) >= 1)
+		check("c4 ai: it waits C4CooldownSeconds (30) before the next one", count(later, "GuardPlants") == 0)
+		run(12)
+		check("c4 ai: ... then plants again", count(combat:drainEvents(), "GuardPlants") >= 1)
+	end
+
+	do -- c4 only when out of sight, and only in range
+		local HEAVY = function() return { Health = 250, DamageOutput = 1, PlantsC4 = true } end
+		local combat, al, bots, pr, run = armedFight({ classInfo = HEAVY, params = { PlayerMaxHealth = 100000 } })
+		combat:drainEvents()
+		run(3)
+		check("c4 ai: a heavy that SEES the player does not plant (it shoots)", count(combat:drainEvents(), "GuardPlants") == 0)
+		local c2, a2, b2, p2, r2 = armedFight({ classInfo = HEAVY, params = { PlayerMaxHealth = 100000 } })
+		c2.Sight.canSee = function() return false end
+		p2:move("p1", -2, 0, 0)
+		c2:noise("shot", 40, 0, 0, "p1") -- it knows a spot 60 studs away
+		c2:drainEvents()
+		r2(0.5)
+		check("c4 ai: out of range of the known spot it does not plant", count(c2:drainEvents(), "GuardPlants") == 0)
+	end
+
+	do -- hurtPlayer
+		local combat, al, bots, pr, run = armedFight({ params = { PlayerMaxHealth = 100 } })
+		combat:drainEvents()
+		check("hurt: hurtPlayer returns the health left", combat:hurtPlayer("p1", 30, "x") == 70)
+		check("hurt: and reports PlayerHit with the source", count(combat:drainEvents(), "PlayerHit", function(e) return e.Bot == "x" and e.Damage == 30 and e.Health == 70 end) == 1)
+		check("hurt: the last point down reports PlayerDown", combat:hurtPlayer("p1", 500, "x") == 0 and count(combat:drainEvents(), "PlayerDown") == 1)
+		check("hurt: a player who is down cannot be hurt again", combat:hurtPlayer("p1", 5, "x") == nil)
+		local off = live({ { X = -20 } }, { enabled = false })
+		check("hurt: not opted in, nothing happens", off:hurtPlayer("p1", 5, "x") == nil)
+	end
+
+	do -- determinism
+		local function trace()
+			local combat, al, bots, pr, run = armedFight({ classInfo = GRENADIER, params = { PlayerMaxHealth = 100000 }, seed = 11 })
+			combat:drainEvents()
+			run(12)
+			local t = {}
+			for _, e in ipairs(combat:drainEvents()) do if e.Kind == "GuardThrows" then t[#t + 1] = string.format("%.3f,%.3f@%.2f", e.X, e.Z, e.Time) end end
+			return table.concat(t, "|")
+		end
+		check("grenade ai: the same seed throws at the same spots and times", trace() == trace() and trace() ~= "")
+	end
+
 end

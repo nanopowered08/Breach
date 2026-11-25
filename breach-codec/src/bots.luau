@@ -534,6 +534,9 @@ local function createBot(self, node)
 		return pick.Route, pick.Name, #found
 	end
 	local route, routeName, choices = choose(a.Nodes, 1)
+	if node.RouteOverride then -- spawnAt: a one-node route at the spawn position
+		route, routeName, choices = node.RouteOverride, "spawn", 1
+	end
 	local brk = choose(a.NodesBreak, 2) or {}
 	if behavior ~= "PatrolWalk" and behavior ~= "WorkWithBreaks" and behavior ~= "PassingCivilian" then
 		self.Skipped[#self.Skipped + 1] = { Where = where, Reason = "behaviour '" .. tostring(behavior) .. "' is not implemented yet" }
@@ -589,6 +592,26 @@ function Sim:spawn(attrs, name)
 	self.SpawnCount = (self.SpawnCount or 0) + 1
 	local id = "spawn:" .. tostring(name or "bot") .. "#" .. self.SpawnCount
 	local node = { Id = id, Name = tostring(name or "bot") .. "#" .. self.SpawnCount, Path = id, Attrs = attrs, Children = {} }
+	local bot = createBot(self, node)
+	if bot then
+		bot.Spawned = true
+		self:recount()
+	end
+	return bot
+end
+
+-- A bot made at a given position while the mission runs (reinforcements, BreachSpawner M9f). `attrs` as for spawn(); the bot stands at x, y, z
+-- (a one-node route there) and behaves as a PatrolWalk bot with nowhere to walk to until the layer above commands it.
+function Sim:spawnAt(x, y, z, attrs, name)
+	self.SpawnCount = (self.SpawnCount or 0) + 1
+	local id = "spawn:" .. tostring(name or "bot") .. "#" .. self.SpawnCount
+	local a = {}
+	for k, v in pairs(attrs or {}) do
+		a[k] = v
+	end
+	a.Behavior = a.Behavior or "PatrolWalk"
+	local node = { Id = id, Name = tostring(name or "bot") .. "#" .. self.SpawnCount, Path = id, Attrs = a, Children = {},
+		RouteOverride = { { X = x, Y = y, Z = z, Name = "SpawnPoint", Attrs = {} } } }
 	local bot = createBot(self, node)
 	if bot then
 		bot.Spawned = true

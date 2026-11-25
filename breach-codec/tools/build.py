@@ -2,6 +2,8 @@
 """Assemble the single-file libraries: hand-written source with generated data spliced in."""
 JOBS = [("src/body.luau", [("--@@TABLES@@", "src/tables.inc"), ("--@@JSON@@", "src/json.inc")], "BreachCodec.luau"),
         ("src/encode.luau", [("--@@TABLES@@", "src/tables.inc")], "BreachEncode.luau"),
+        ("src/explosives.luau", [], "BreachExplosives.luau"),
+        ("src/spawner.luau", [("--@@RANDOM@@", "src/random.luau")], "BreachSpawner.luau"),
         ("src/validator.luau", [("--@@ATTRMAP@@", "src/attrmap.inc")], "BreachValidator.luau"),
         ("src/mission.luau", [], "BreachMission.luau"),
         ("src/standalone.luau", [("--@@JSON@@", "src/json.inc")], "BreachStandalone.luau"),

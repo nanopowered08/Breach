@@ -44,6 +44,9 @@ local M = {
 	Alert = require("../../breach-codec/BreachAlert"),
 	CombatData = require("../../breach-codec/BreachCombatData"),
 	Combat = require("../../breach-codec/BreachCombat"),
+	Explosives = require("../../breach-codec/BreachExplosives"),
+	Spawner = require("../../breach-codec/BreachSpawner"),
+	Expr = require("../../breach-codec/BreachExpr"),
 	Hostage = require("../../breach-codec/BreachHostage"),
 	Behavior = require("../../breach-codec/BreachBehavior"),
 }

@@ -60,6 +60,17 @@
 	combat:standUp(playerId), combat:posing(playerId).
 	Events: PoseStarted {Player}  PoseEnded {Player, Why: StoodUp | HelpedUp | Attacking | Trespass | Armed | Gone}  GuardHelps {Bot, Player}
 	        PlayerHelpedUp {Bot, Player}  EscortStarted {Bot, Player, X, Y, Z}  EscortArrived {Bot, Player, X, Y, Z}  EscortAborted {Bot, Player, Why}
+	M9e, grenades and C4 (needs `deps.explosives`, a BreachExplosives; without it a guard never throws or plants) [P: the plan, section 4]:
+	  * a guard whose class says Grenades (CombatData.Classes: Grenadier) that KNOWS where the player is (not older than GrenadeKnowSeconds, 3) and is
+	    GrenadeRange (6 to 25 studs) away throws a grenade at that spot, off by up to GrenadeScatter (1.5 studs), then waits a random GrenadeInterval
+	    (12 to 20 s) from the seeded stream; the wait only counts down while it has a target;
+	  * a guard whose class says PlantsC4 (Heavy) that knows where the player is, cannot SEE them and stands within C4PlantRange (8) of that spot
+	    plants a C4 where it stands, then waits C4CooldownSeconds (30);
+	  * both only in the Attacking phase after the lockdown has landed, never for a guard the alert is busy with, and damage is scaled by the class DamageOutput.
+	A grenadier does not rush the player: once they are inside its throwing range it holds where it stands (Mode "Covering") and throws.
+	combat:inform(botId, playerId, source) tells a guard where a player is (used for reinforcements).
+	combat:hurtPlayer(playerId, amount, byId) is how explosives (and anything else) hurt a player: the same PlayerHit / PlayerDown events as a round.
+	Events: GuardThrows {Bot, X, Y, Z}  GuardPlants {Bot, X, Y, Z}
 ]==]
 
 local Random = (function()
@@ -177,6 +188,10 @@ Combat.Defaults = {
 	HelpUpRange = 3, -- studs from the player at which the guard starts helping [P]
 	EscortArriveDistance = 2.5, -- studs from the safe place at which the escort is over [P]
 	EscortFollowDistance = 1.5, -- the escorted player is kept this far behind the guard [P]
+	GrenadeKnowSeconds = 3, -- a guard throws only at a position it learned this recently [P]
+	GrenadeScatter = 1.5, -- studs a thrown grenade lands off the known position, at most [P]
+	GrenadeIntervalDefault = { 12, 20 }, GrenadeRangeDefault = { 6, 25 }, -- when the class does not say [P: plan]
+	C4PlantRange = 8, C4CooldownSeconds = 30, -- [P]
 }
 
 local Sim = {}
@@ -237,6 +252,7 @@ function Combat.new(deps, opts)
 		Bots = deps.bots, Sight = deps.sight, Alert = deps.alert, PlayersFn = deps.players, Setup = setup,
 		Params = params, Phase = enabled and "Calm" or "Off", Knows = {}, Seen = {}, Events = {}, Time = 0,
 		Mode = {}, Goal = {}, Wait = {}, Investigate = {}, Conceal = {}, Pose = {}, Helper = {}, BotHelp = {},
+		Explosives = deps.explosives, GrenadeT = {}, C4Next = {},
 		SetStanceFn = deps.setStance, MovePlayerFn = deps.movePlayer, TrespassFn = deps.trespassStatus, SafePlaces = deps.safePlaces or {},
 		DetectorFn = deps.detector, HidesFn = deps.hidesWeapon,
 		Health = {}, Down = {}, BotHealth = {}, Ammo = {}, Reload = {}, Fire = {}, Exposure = {},
@@ -375,6 +391,7 @@ function Sim:step(dt)
 	self:_pose(bots, dt)
 	self:_move(bots, dt)
 	self:_shoot(bots, dt)
+	self:_explosives(bots, dt)
 end
 
 local function dist3(ax, ay, az, bx, by, bz)
@@ -426,7 +443,27 @@ function Sim:_move(bots, dt)
 			local inv = self.Investigate[id]
 			if k then
 				local g = self.Goal[id]
-				if self.Mode[id] ~= "Hunting" or not g or dist3(g.X, g.Y, g.Z, k.X, k.Y, k.Z) > p.HuntRetargetDistance then
+				-- a grenadier throws from where it stands once the player is inside its throwing range (M9e: "throws from cover"); it does not rush them
+				local covering = false
+				if self.Explosives then
+					local info = self:_botInfo(bot)
+					if info.Grenades then
+						local range = info.GrenadeRange or p.GrenadeRangeDefault
+						local bx, by, bz = self.Bots:position(id)
+						if bx then
+							local d = dist3(bx, by, bz, k.X, k.Y, k.Z)
+							covering = d >= range[1] and d <= range[2]
+						end
+					end
+				end
+				if covering then
+					if self.Mode[id] ~= "Covering" then
+						self.Investigate[id], self.Wait[id], self.Goal[id] = nil, nil, nil
+						self.Mode[id] = "Covering"
+						self.Bots:hold(id, "Covering")
+						emit(self, "GuardMoves", { Bot = id, Mode = "Covering" })
+					end
+				elseif self.Mode[id] ~= "Hunting" or not g or dist3(g.X, g.Y, g.Z, k.X, k.Y, k.Z) > p.HuntRetargetDistance then
 					self.Investigate[id], self.Wait[id] = nil, nil
 					self:_send(bot, "Hunting", "Hunting", k.X, k.Y, k.Z)
 				end
@@ -676,20 +713,44 @@ function Sim:setPlayerHealth(id, hp)
 	self.Down[id] = self.Health[id] <= 0 or nil
 end
 
-function Sim:_damagePlayer(bot, pl, amount)
-	local hp = self:playerHealth(pl.Id)
-	hp = math.max(0, hp - amount)
-	self.Health[pl.Id] = hp
-	emit(self, "PlayerHit", { Bot = bot.Id, Player = pl.Id, Damage = amount, Health = hp })
-	if hp <= 0 then
-		self.Down[pl.Id] = true
-		emit(self, "PlayerDown", { Player = pl.Id, By = bot.Id })
+-- Damage to a player from anything (a round, a grenade, C4). Returns the player's health afterwards, or nil if they are already down.
+function Sim:hurtPlayer(playerId, amount, byId)
+	if self.Phase == "Off" or self.Down[playerId] then
+		return nil
 	end
+	local hp = self:playerHealth(playerId)
+	hp = math.max(0, hp - amount)
+	self.Health[playerId] = hp
+	emit(self, "PlayerHit", { Bot = byId, Player = playerId, Damage = amount, Health = hp })
+	if hp <= 0 then
+		self.Down[playerId] = true
+		emit(self, "PlayerDown", { Player = playerId, By = byId })
+	end
+	return hp
+end
+
+-- Tell a guard where a player is (a reinforcement that "pathfinds to the player" [Play], or a script): it knows them from now on. Returns true if it took.
+function Sim:inform(botId, playerId, source)
+	if self.Phase == "Off" then
+		return false
+	end
+	local bot = self.Bots:bot(botId)
+	local pl = playerById(self, playerId)
+	if out(bot) or not pl then
+		return false
+	end
+	self:_know(bot, pl, source or "Told")
+	return true
+end
+
+function Sim:_damagePlayer(bot, pl, amount)
+	self:hurtPlayer(pl.Id, amount, bot.Id)
 end
 
 function Sim:_botInfo(bot)
 	local info = self.ClassInfo(bot)
-	return { Health = info.Health or 120, DamageOutput = info.DamageOutput or 1, ShowsHealthBar = info.ShowsHealthBar == true }
+	return { Health = info.Health or 120, DamageOutput = info.DamageOutput or 1, ShowsHealthBar = info.ShowsHealthBar == true,
+		Grenades = info.Grenades == true, GrenadeInterval = info.GrenadeInterval, GrenadeRange = info.GrenadeRange, PlantsC4 = info.PlantsC4 == true }
 end
 
 function Sim:botHealth(botId)
@@ -786,6 +847,53 @@ function Sim:_shoot(bots, dt)
 				end
 			else
 				self.Fire[id] = 0
+			end
+		end
+	end
+end
+
+---------------------------------------------------------------------------------------------------------- M9e: grenades and C4
+local function between(self, range)
+	local lo, hi = range[1], range[2]
+	return lo + (hi - lo) * self.Stream:nextFloat()
+end
+
+function Sim:_explosives(bots, dt)
+	local ex = self.Explosives
+	if not ex or self.Phase ~= "Attacking" or self.Alert:level() < 3 then
+		return
+	end
+	local p = self.Params
+	for _, bot in ipairs(bots) do
+		local id = bot.Id
+		if not out(bot) and not bot.Flags.Hostage and not self.Alert:busy(id) and not self.BotHelp[id] then
+			local k = self.Knows[id]
+			local info = self:_botInfo(bot)
+			local bx, by, bz = self.Bots:position(id)
+			if k and bx then
+				local d = dist3(bx, by, bz, k.X, k.Y, k.Z)
+				local age = self.Time - k.T
+				if info.Grenades then
+					local range = info.GrenadeRange or p.GrenadeRangeDefault
+					if age <= p.GrenadeKnowSeconds and d >= range[1] and d <= range[2] then
+						if self.GrenadeT[id] == nil then
+							self.GrenadeT[id] = between(self, info.GrenadeInterval or p.GrenadeIntervalDefault)
+						end
+						self.GrenadeT[id] -= dt
+						if self.GrenadeT[id] <= 0 then
+							local tx = k.X + (self.Stream:nextFloat() * 2 - 1) * p.GrenadeScatter
+							local tz = k.Z + (self.Stream:nextFloat() * 2 - 1) * p.GrenadeScatter
+							ex:throwGrenade({ Kind = "Bot", Id = id }, tx, k.Y, tz, info.DamageOutput)
+							emit(self, "GuardThrows", { Bot = id, X = tx, Y = k.Y, Z = tz })
+							self.GrenadeT[id] = between(self, info.GrenadeInterval or p.GrenadeIntervalDefault)
+						end
+					end
+				end
+				if info.PlantsC4 and (self.C4Next[id] or 0) <= self.Time and d <= p.C4PlantRange and not self.Sight:canSee(id, k.Player) then
+					ex:plantC4({ Kind = "Bot", Id = id }, bx, by, bz, info.DamageOutput)
+					emit(self, "GuardPlants", { Bot = id, X = bx, Y = by, Z = bz })
+					self.C4Next[id] = self.Time + p.C4CooldownSeconds
+				end
 			end
 		end
 	end
