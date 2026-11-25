@@ -149,6 +149,7 @@ function Adapter.start(Breach, options)
 		end
 	end
 	local adapter = Core.new(session, host, { maxDt = options.MaxDt })
+    host.Combat = session.Combat
 	print(("[Breach] mission %s ready in %.1fs: %d bots (engine %s)"):format(tostring(info.MapId), os.clock() - t0, #session.Bots:alive(), Breach and Breach.version and Breach.version() or "?"))
 
 	if options.RenderMap ~= false then
@@ -199,6 +200,22 @@ function Adapter.start(Breach, options)
 	conn = RunService.Heartbeat:Connect(function(dt)
 		local ok, err = pcall(function()
 			adapter:syncPlayers(host:getPlayers())
+            local combat = session.Combat
+			if combat then
+				for _, plr in ipairs(game:GetService("Players"):GetPlayers()) do
+					local char = plr.Character
+					if char then
+						local id = tostring(plr.UserId)
+						if char:GetAttribute("BreachLieDown") == true then
+							if not combat:posing(id) then
+								combat:lieDown(id)
+							end
+						elseif combat:posing(id) then
+							combat:standUp(id)
+						end
+					end
+				end
+			end
 			adapter:step(dt)
 		end)
 		if ok then
