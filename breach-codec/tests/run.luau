@@ -616,6 +616,15 @@ require("./combat_tests")(check)
 -- M11.0: shuffle survey
 require("./shuffle_tests")(check)
 
+-- M9e: grenades and C4
+require("./explosives_tests")(check)
+
+-- M9f: spawners, pools, waves
+require("./spawner_tests")(check)
+
+-- M9g: the combat layers through a Session
+require("./session_tests")(check)
+
 -- M12: mission-code encoder
 require("./encode_tests")(check)
 
