@@ -42,6 +42,7 @@ function Host.new(options)
 end
 
 function Host:destroy()
+    self.Explosives = nil
 	self.Root:Destroy()
 	self.Rigs = {}
 end
@@ -173,8 +174,71 @@ function Host:event(ev)
 	if ev.Source == "Combat" then
 		if ev.Kind == "PlayerHit" then
 			self:damagePlayer(ev.Player, ev.Damage)
+			if ev.Health > 0 then
+				local plr = Players:GetPlayerByUserId(tonumber(ev.Player) or -1)
+				if plr and plr.Character then
+					plr.Character:SetAttribute("BreachDown", nil)
+				end
+			end
 		elseif ev.Kind == "GuardFired" then
 			self:tracer(ev.Bot, ev.Player, ev.Hit)
+		elseif ev.Kind == "PhaseChanged" then
+			self:combatPhaseChanged(ev.Phase, ev.Prev)
+		elseif ev.Kind == "BotHit" then
+			self:updateBotHealth(ev.Bot)
+		elseif ev.Kind == "BotDied" then
+			local rig = self.Rigs[ev.Bot]
+			if rig then
+				for _, p in ipairs(rig.Model:GetDescendants()) do
+					if p:IsA("BasePart") then
+						p.Color = Color3.fromRGB(45, 45, 45)
+					end
+				end
+			end
+		elseif ev.Kind == "GuardKnows" then
+			local rig = self.Rigs[ev.Bot]
+			if rig then
+				rig.Model:SetAttribute("BotKnows", ev.Player)
+			end
+		elseif ev.Kind == "GuardLostTrack" then
+			local rig = self.Rigs[ev.Bot]
+			if rig then
+				rig.Model:SetAttribute("BotKnows", nil)
+			end
+		elseif ev.Kind == "GuardReloading" then
+			local rig = self.Rigs[ev.Bot]
+			if rig then
+				rig.Model:SetAttribute("BotReloading", true)
+			end
+		elseif ev.Kind == "PlayerDown" then
+			local plr = Players:GetPlayerByUserId(tonumber(ev.Player) or -1)
+			if plr and plr.Character then
+				plr.Character:SetAttribute("BreachDown", true)
+			end
+		elseif ev.Kind == "PoseStarted" then
+			-- keep the character attribute in step with the engine's stance, or syncPlayers would overwrite it back to "stand"
+			local plr = Players:GetPlayerByUserId(tonumber(ev.Player) or -1)
+			if plr and plr.Character then
+				plr.Character:SetAttribute("BreachStance", "lying")
+			end
+		elseif ev.Kind == "PoseEnded" then
+			local plr = Players:GetPlayerByUserId(tonumber(ev.Player) or -1)
+			if plr and plr.Character then
+				plr.Character:SetAttribute("BreachStance", "stand")
+			end
+		end
+	elseif ev.Source == "Explosives" then
+		if ev.Kind == "GrenadeThrown" then
+			self:spawnExplosive(ev.Id, "Grenade", ev.X, ev.Y, ev.Z)
+		elseif ev.Kind == "C4Planted" then
+			self:spawnExplosive(ev.Id, "C4", ev.X, ev.Y, ev.Z)
+		elseif ev.Kind == "C4Armed" then
+			self:armExplosive(ev.Id)
+		elseif ev.Kind == "Explosion" then
+			self:explode(ev.X, ev.Y, ev.Z, ev.Radius)
+			self:removeExplosive(ev.Id)
+		elseif ev.Kind == "C4Disarmed" then
+			self:removeExplosive(ev.Id)
 		end
 	end
 	if self.Options.LogEvents then
@@ -395,6 +459,103 @@ function Host:applyLighting(setting, presets)
 		clone.Parent = c:IsA("Clouds") and workspace.Terrain or Lighting
 	end
 	return name
+end
+
+---------------------------------------------------------------------------------------------------------- M9: combat
+-- The combat phase (BreachCombat): Calm | Searching | Attacking, on the Workspace so client scripts can read it.
+function Host:combatPhaseChanged(phase, prev)
+	workspace:SetAttribute("BreachCombatPhase", phase)
+	if prev then
+		print(("[Breach] combat phase %s -> %s (%s)"):format(tostring(prev), tostring(phase), tostring(ev and ev.Why or "")))
+	end
+end
+
+-- A guard's health bar, shown only for classes that say so (BreachCombatData: Health above 200 or ForceHealthDisplay).
+-- Needs host.Combat = session.Combat (set in Init.luau). Updated from BotHit events.
+function Host:updateBotHealth(id)
+	local rig = self.Rigs[id]
+	if not (rig and self.Combat) then
+		return
+	end
+	local hp, max, shows = self.Combat:botHealth(id)
+	if not hp or not shows then
+		return
+	end
+	if not rig.HealthBar then
+		local gui = Instance.new("BillboardGui")
+		gui.Name = "Health"
+		gui.Size = UDim2.fromOffset(120, 8)
+		gui.StudsOffset = Vector3.new(0, 3.4, 0)
+		gui.AlwaysOnTop = true
+		local back = Instance.new("Frame")
+		back.Size = UDim2.fromScale(1, 1)
+		back.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
+		back.BorderSizePixel = 0
+		back.Parent = gui
+		local bar = Instance.new("Frame")
+		bar.Name = "Bar"
+		bar.Size = UDim2.fromScale(1, 1)
+		bar.BackgroundColor3 = Color3.fromRGB(220, 60, 60)
+		bar.BorderSizePixel = 0
+		bar.Parent = back
+		gui.Parent = rig.Model.PrimaryPart
+		rig.HealthBar = bar
+	end
+	rig.HealthBar.Size = UDim2.fromScale(math.clamp(hp / math.max(max, 1), 0, 1), 1)
+end
+
+-- M9e: a thrown grenade or a planted C4 as a small neon ball, removed when it goes off (or is disarmed).
+function Host:spawnExplosive(id, kind, x, y, z)
+	self.Explosives = self.Explosives or {}
+	if self.Explosives[id] then
+		return
+	end
+	local part = Instance.new("Part")
+	part.Name = kind .. "_" .. tostring(id)
+	part.Shape = Enum.PartType.Ball
+	part.Size = Vector3.new(0.6, 0.6, 0.6)
+	part.Anchored, part.CanCollide, part.CanQuery, part.CanTouch = true, false, false, false
+	part.Material = Enum.Material.Neon
+	part.Color = kind == "Grenade" and Color3.fromRGB(70, 130, 70) or Color3.fromRGB(170, 70, 40)
+	part.CFrame = CFrame.new(x, y + 0.3, z)
+	part.Parent = self.Root
+	self.Explosives[id] = part
+end
+
+function Host:armExplosive(id)
+	local part = self.Explosives and self.Explosives[id]
+	if part then
+		part.Color = Color3.fromRGB(255, 90, 40)
+	end
+end
+
+function Host:removeExplosive(id)
+	local part = self.Explosives and self.Explosives[id]
+	if part then
+		part:Destroy()
+		self.Explosives[id] = nil
+	end
+end
+
+-- The blast: a neon sphere that grows to the radius and fades.
+function Host:explode(x, y, z, radius)
+	radius = math.max(radius or 5, 1)
+	local part = Instance.new("Part")
+	part.Name = "Explosion"
+	part.Shape = Enum.PartType.Ball
+	part.Size = Vector3.new(1, 1, 1)
+	part.Anchored, part.CanCollide, part.CanQuery, part.CanTouch = true, false, false, false
+	part.Material = Enum.Material.Neon
+	part.Color = Color3.fromRGB(255, 170, 60)
+	part.Transparency = 0.2
+	part.CFrame = CFrame.new(x, y, z)
+	part.Parent = self.Root
+	local tween = game:GetService("TweenService"):Create(part, TweenInfo.new(0.35, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {
+		Size = Vector3.new(radius * 2, radius * 2, radius * 2),
+		Transparency = 1,
+	})
+	tween:Play()
+	Debris:AddItem(part, 0.4)
 end
 
 return Host
